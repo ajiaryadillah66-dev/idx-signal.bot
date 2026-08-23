@@ -177,3 +177,48 @@ def classify_intraday_bullish(df: pd.DataFrame) -> dict:
         "last_price": round(float(last["Close"]), 2),
         "rsi": round(float(last["RSI"]), 1) if pd.notna(last["RSI"]) else None,
     }
+
+
+def detect_bullish_candle_pattern(df: pd.DataFrame) -> dict:
+    """
+    Deteksi pola candle Doji/Hammer pada candle TERAKHIR (candle hari
+    sebelumnya, dipakai untuk laporan pagi sebelum market buka), khusus
+    yang muncul setelah tren turun -- konteks yang bikin pola ini dianggap
+    sinyal pembalikan ke atas (bullish reversal), bukan sekadar pola netral.
+
+    Return: {"patterns": [...], "last_close": ...} atau None kalau gak ada
+    pola bullish reversal yang terdeteksi.
+    """
+    if len(df) < 6:
+        return None
+
+    last = df.iloc[-1]
+    o, h, l, c = float(last["Open"]), float(last["High"]), float(last["Low"]), float(last["Close"])
+    body = abs(c - o)
+    candle_range = h - l
+    if candle_range <= 0:
+        return None
+
+    upper_shadow = h - max(o, c)
+    lower_shadow = min(o, c) - l
+
+    # Konteks: apakah 5 candle terakhir (sebelum candle ini) sedang downtrend
+    was_downtrend = float(df["Close"].iloc[-1]) < float(df["Close"].iloc[-6])
+
+    is_doji = body <= 0.1 * candle_range
+    is_hammer = (
+        body > 0
+        and lower_shadow >= 2 * body
+        and upper_shadow <= 0.3 * body
+    )
+
+    patterns = []
+    if was_downtrend and is_doji:
+        patterns.append("Doji (indikasi keraguan pasar setelah turun, potensi berbalik naik)")
+    if was_downtrend and is_hammer:
+        patterns.append("Hammer (sumbu bawah panjang, potensi rebound)")
+
+    if not patterns:
+        return None
+
+    return {"patterns": patterns, "last_close": round(c, 2)}

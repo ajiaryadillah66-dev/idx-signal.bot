@@ -22,6 +22,7 @@ from idx_tickers import get_idx_tickers
 from signals import (
     compute_indicators, classify_signal,
     compute_intraday_indicators, classify_intraday_bullish,
+    detect_bullish_candle_pattern,
 )
 from notifier import send_telegram_message
 from state_store import load_notified_today, save_notified_today
@@ -58,16 +59,24 @@ def _download_batches(tickers, period, interval):
     return all_data
 
 
-def run_daily_screening(tickers):
-    """Dipakai untuk mode evening & morning (basis data harian)."""
+def run_daily_screening(tickers, detect_candles=False):
+    """Dipakai untuk mode evening & morning (basis data harian).
+    Kalau detect_candles=True (mode pagi), sekalian scan pola candle
+    Doji/Hammer bullish reversal di semua saham (bukan cuma yang punya
+    sinyal teknikal lain), pakai data yang sama tanpa download ulang."""
     raw = _download_batches(tickers, HISTORY_PERIOD, "1d")
     results = {}
+    candle_patterns = {}
     for t, df in raw.items():
         df_ind = compute_indicators(df)
         res = classify_signal(df_ind)
         if res["signal"]:
             results[t] = res
-    return results
+        if detect_candles:
+            cp = detect_bullish_candle_pattern(df)
+            if cp:
+                candle_patterns[t] = cp
+    return results, candle_patterns
 
 
 def run_intraday_scan(tickers):
@@ -104,9 +113,11 @@ def _tag_suffix(code_no_suffix: str, foreign_flow: dict) -> str:
     return f" [{', '.join(tags)}]" if tags else ""
 
 
-def format_daily_message(results: dict, mode: str, foreign_flow: dict = None, ihsg: dict = None) -> str:
+def format_daily_message(results: dict, mode: str, foreign_flow: dict = None, ihsg: dict = None,
+                          candle_patterns: dict = None) -> str:
     foreign_flow = foreign_flow or {}
     ihsg = ihsg or {"trend": "unknown"}
+    candle_patterns = candle_patterns or {}
     buys = {k: v for k, v in results.items() if v["signal"] == "BUY"}
     rebounds = {k: v for k, v in results.items() if v["signal"] == "REBOUND_WATCH"}
     sells = {k: v for k, v in results.items() if v["signal"] == "SELL"}
@@ -169,6 +180,16 @@ def format_daily_message(results: dict, mode: str, foreign_flow: dict = None, ih
         if not sells:
             lines.append("Tidak ada sinyal jual/overbought signifikan.")
 
+        # Section baru: pola candle Doji/Hammer bullish reversal (candle kemarin)
+        if candle_patterns:
+            lines.append("*🕯️ CANDLE BULLISH REVERSAL (kemarin)*")
+            for code, cp in sorted(candle_patterns.items()):
+                code_short = code.replace(".JK", "")
+                bumn_tag = " [BUMN]" if is_bumn(code_short) else ""
+                patterns_str = "; ".join(cp["patterns"])
+                lines.append(f"• {code_short} @ {cp['last_close']}{bumn_tag} - {patterns_str}")
+            lines.append("")
+
     # Section khusus foreign flow, hanya untuk laporan sore
     if mode == "evening" and foreign_flow:
         top_buy = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"], reverse=True)[:5]
@@ -220,10 +241,10 @@ def main():
             print("[main] Tidak ada sinyal bullish baru saat ini.")
         return
 
-    results = run_daily_screening(tickers)
+    results, candle_patterns = run_daily_screening(tickers, detect_candles=(mode == "morning"))
     foreign_flow = get_foreign_flow() if mode == "evening" else {}
     ihsg = get_ihsg_trend() if mode == "evening" else None
-    message = format_daily_message(results, mode, foreign_flow, ihsg)
+    message = format_daily_message(results, mode, foreign_flow, ihsg, candle_patterns)
     print(message)
     send_telegram_message(message)
 
