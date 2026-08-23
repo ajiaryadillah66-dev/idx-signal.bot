@@ -39,6 +39,10 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Volume rata-rata 20 hari
     out["VolAvg20"] = out["Volume"].rolling(20).mean()
 
+    # Untuk analisa BSJP: likuiditas (rata-rata value transaksi) & jarak ke resistance
+    out["AvgValue20"] = (out["Close"] * out["Volume"]).rolling(20).mean()
+    out["High20"] = out["High"].rolling(20).max()
+
     return out
 
 
@@ -96,6 +100,9 @@ def classify_signal(df: pd.DataFrame) -> dict:
         "reasons": reasons,
         "last_close": round(float(last["Close"]), 2),
         "rsi": round(float(last["RSI"]), 1) if pd.notna(last["RSI"]) else None,
+        "avg_value_20d": float(last["AvgValue20"]) if pd.notna(last["AvgValue20"]) else None,
+        "pct_below_high20": round(float((last["High20"] - last["Close"]) / last["High20"] * 100), 2)
+            if pd.notna(last["High20"]) and last["High20"] > 0 else None,
     }
 
 
@@ -114,6 +121,12 @@ def compute_intraday_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["RSI"] = 100 - (100 / (1 + rs))
 
     out["VolAvg20"] = out["Volume"].rolling(20).mean()
+
+    # Untuk deteksi pola sideway: range harga & rata-rata harga N bar terakhir
+    # (tidak termasuk bar terakhir, karena bar terakhir yang dicek untuk breakout)
+    out["RangeHigh20"] = out["High"].shift(1).rolling(20).max()
+    out["RangeLow20"] = out["Low"].shift(1).rolling(20).min()
+    out["RangeMean20"] = out["Close"].shift(1).rolling(20).mean()
     return out
 
 
@@ -122,8 +135,14 @@ def classify_intraday_bullish(df: pd.DataFrame) -> dict:
     Deteksi saham yang BARU SAJA mulai berbalik bullish hari ini (dipakai
     untuk alert real-time selama jam trading), berbeda dari classify_signal
     yang dipakai untuk screening harian.
+
+    Dua pola yang dideteksi:
+    1. Momentum reversal umum: EMA9 cross ke atas EMA21
+    2. Breakout dari sideway: harga sempat bergerak di range sempit
+       (20 bar terakhir), lalu tembus ke atas range itu dengan volume naik
     """
-    if len(df) < 25 or df[["EMA9", "EMA21", "RSI"]].iloc[-1].isna().any():
+    required_cols = ["EMA9", "EMA21", "RSI", "RangeHigh20", "RangeLow20", "RangeMean20"]
+    if len(df) < 25 or df[required_cols].iloc[-1].isna().any():
         return {"bullish": False, "reasons": [], "last_price": None, "rsi": None}
 
     last = df.iloc[-1]
@@ -131,16 +150,25 @@ def classify_intraday_bullish(df: pd.DataFrame) -> dict:
     reasons = []
 
     ema_cross_up = prev["EMA9"] <= prev["EMA21"] and last["EMA9"] > last["EMA21"]
-    rsi_turning_up = prev["RSI"] < 50 and last["RSI"] >= 50 and last["RSI"] > prev["RSI"]
     volume_spike = last["Volume"] > 1.5 * last["VolAvg20"] if pd.notna(last["VolAvg20"]) else False
     price_up = last["Close"] > prev["Close"]
 
-    bullish = ema_cross_up and price_up
-    if bullish:
-        reasons.append("EMA9 cross ke atas EMA21 (momentum jangka pendek berbalik naik)")
-        if rsi_turning_up:
-            reasons.append(f"RSI naik ke {last['RSI']:.1f}")
+    # Pola sideway: range 20 bar terakhir sempit (<3.5% dari harga rata-rata)
+    range_width_pct = (last["RangeHigh20"] - last["RangeLow20"]) / last["RangeMean20"] * 100
+    was_sideways = range_width_pct < 3.5
+    breakout_from_range = last["Close"] > last["RangeHigh20"]
+
+    momentum_bullish = ema_cross_up and price_up
+    sideway_breakout = was_sideways and breakout_from_range and price_up
+
+    bullish = momentum_bullish or sideway_breakout
+    if sideway_breakout:
+        reasons.append(f"breakout dari pola sideway (range ~{range_width_pct:.1f}% beberapa jam terakhir)")
         if volume_spike:
+            reasons.append("volume melonjak saat breakout")
+    if momentum_bullish:
+        reasons.append("EMA9 cross ke atas EMA21 (momentum jangka pendek berbalik naik)")
+        if volume_spike and not sideway_breakout:
             reasons.append("volume melonjak dari rata-rata")
 
     return {

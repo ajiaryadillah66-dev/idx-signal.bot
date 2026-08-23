@@ -27,6 +27,8 @@ from notifier import send_telegram_message
 from state_store import load_notified_today, save_notified_today
 from foreign_flow import get_foreign_flow, format_rupiah
 from bumn_list import is_bumn
+from market_context import get_ihsg_trend
+from bsjp_confidence import score_confidence
 
 BATCH_SIZE = 50
 HISTORY_PERIOD = "6mo"
@@ -102,17 +104,16 @@ def _tag_suffix(code_no_suffix: str, foreign_flow: dict) -> str:
     return f" [{', '.join(tags)}]" if tags else ""
 
 
-def format_daily_message(results: dict, mode: str, foreign_flow: dict = None) -> str:
+def format_daily_message(results: dict, mode: str, foreign_flow: dict = None, ihsg: dict = None) -> str:
     foreign_flow = foreign_flow or {}
-    label = "🌆 *15:30 WIB - Prediksi Saham Lanjut Naik Besok*" if mode == "evening" \
-        else "🌅 *PAGI - Screening Jual/Overbought*"
+    ihsg = ihsg or {"trend": "unknown"}
     buys = {k: v for k, v in results.items() if v["signal"] == "BUY"}
     rebounds = {k: v for k, v in results.items() if v["signal"] == "REBOUND_WATCH"}
     sells = {k: v for k, v in results.items() if v["signal"] == "SELL"}
 
-    lines = [label, ""]
+    lines = []
 
-    def section(title, items):
+    def section_plain(title, items):
         if not items:
             return
         lines.append(f"*{title}*")
@@ -123,12 +124,50 @@ def format_daily_message(results: dict, mode: str, foreign_flow: dict = None) ->
             lines.append(f"• {code_short} @ {info['last_close']} (RSI {info['rsi']}) - {reasons}{tag}")
         lines.append("")
 
-    section("✅ BUY", buys)
-    section("👀 REBOUND WATCH", rebounds)
-    section("🔻 SELL / OVERBOUGHT", sells)
+    def section_with_confidence(title, items):
+        """Khusus BUY & REBOUND WATCH di laporan sore: dikasih skor confidence & di-sort."""
+        if not items:
+            return
+        scored = []
+        for code, info in items.items():
+            code_short = code.replace(".JK", "")
+            conf = score_confidence(code_short, info, foreign_flow, ihsg["trend"])
+            scored.append((code_short, info, conf))
 
-    if not (buys or rebounds or sells):
-        lines.append("Tidak ada sinyal signifikan.")
+        order = {"Tinggi": 0, "Sedang": 1, "Rendah": 2}
+        scored.sort(key=lambda x: (order[x[2]["level"]], x[0]))
+
+        lines.append(f"*{title}*")
+        for code_short, info, conf in scored:
+            reasons = "; ".join(info["reasons"])
+            bumn_tag = " [BUMN]" if is_bumn(code_short) else ""
+            flow = foreign_flow.get(code_short)
+            flow_tag = ""
+            if flow:
+                flow_tag = f", asing net {'buy' if flow['net_foreign'] > 0 else 'sell'} {format_rupiah(abs(flow['net_foreign']))}"
+            lines.append(f"• {code_short} @ {info['last_close']} (RSI {info['rsi']}) - Confidence: *{conf['level']}*{bumn_tag}{flow_tag}")
+            lines.append(f"   _{reasons}_")
+            if conf["cautions"]:
+                lines.append(f"   ⚠️ {'; '.join(conf['cautions'])}")
+        lines.append("")
+
+    if mode == "evening":
+        # Sore: fokus HANYA ke kemungkinan saham masih naik besok -> BUY & REBOUND WATCH saja
+        lines.append("🌆 *15:30 WIB - Prediksi Saham Lanjut Naik Besok*")
+        if ihsg["trend"] != "unknown":
+            lines.append(f"_Kondisi IHSG hari ini: {ihsg['trend'].upper()}_")
+        lines.append("")
+        section_with_confidence("✅ BUY", buys)
+        section_with_confidence("👀 REBOUND WATCH", rebounds)
+        if not (buys or rebounds):
+            lines.append("Tidak ada saham dengan potensi lanjut naik besok.")
+    else:
+        # Pagi: fokus HANYA ke sinyal jual/overbought
+        lines.append("🌅 *PAGI - Screening Jual/Overbought*")
+        lines.append("")
+        section_plain("🔻 SELL / OVERBOUGHT", sells)
+        if not sells:
+            lines.append("Tidak ada sinyal jual/overbought signifikan.")
 
     # Section khusus foreign flow, hanya untuk laporan sore
     if mode == "evening" and foreign_flow:
@@ -183,7 +222,8 @@ def main():
 
     results = run_daily_screening(tickers)
     foreign_flow = get_foreign_flow() if mode == "evening" else {}
-    message = format_daily_message(results, mode, foreign_flow)
+    ihsg = get_ihsg_trend() if mode == "evening" else None
+    message = format_daily_message(results, mode, foreign_flow, ihsg)
     print(message)
     send_telegram_message(message)
 

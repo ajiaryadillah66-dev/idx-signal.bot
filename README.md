@@ -52,9 +52,26 @@ Laporan sore sekarang juga menampilkan:
 
 ⚠️ **Catatan jujur soal data foreign flow**: fungsi ini (`foreign_flow.py`) mengambil data dari endpoint IDX (`GetStockSummary`) berdasarkan pola yang umum dipakai komunitas untuk scraping data ini — **bukan dari dokumentasi API resmi publik IDX**. Kemungkinan ada penyesuaian nama field/parameter yang dibutuhkan setelah kamu coba jalankan (cek log `[foreign_flow]` di output Actions kalau datanya kosong/gagal). Kalau gagal, laporan tetap terkirim tanpa data foreign flow (tidak bikin seluruh proses gagal).
 
-Daftar kode BUMN di `bumn_list.py` disusun manual — kalau ada BUMN yang IPO baru atau delisting, update langsung di file itu.
+## 7. Confidence Score untuk BSJP (Beli Sore Jual Pagi)
 
-## 5. Yang Bisa Dikembangkan Selanjutnya
+⚠️ **Penting untuk dipahami**: IDX **menutup data broker summary (bandarmology per kode broker) selama jam trading berlangsung** sejak Desember 2021 — data itu baru bisa dilihat publik SETELAH market tutup. Karena laporan sore kita jalan jam 15:30 (market masih buka), data broker-level beneran gak tersedia saat itu, jadi ini BUKAN true bandarmology.
+
+Sebagai gantinya, tiap saham BUY/REBOUND WATCH di laporan sore dikasih **Confidence Score** (Tinggi/Sedang/Rendah) berdasarkan 4 faktor yang BENERAN tersedia jam 15:30:
+
+| Faktor | Yang dicek |
+|---|---|
+| Foreign flow | Apakah asing net buy atau net sell hari itu |
+| Likuiditas | Rata-rata value transaksi 20 hari (di bawah Rp5 miliar/hari = rawan gap tidak stabil) |
+| Jarak ke resistance | Kalau harga sudah <2% dari harga tertinggi 20 hari = rawan profit taking |
+| Tren IHSG | Kalau IHSG sendiri downtrend = risiko gap-down market-wide buat semua saham |
+
+Tiap saham mulai dari confidence **Tinggi**, turun ke **Sedang**/**Rendah** kalau ada 1/2+ faktor "waspada" (`⚠️`) yang muncul. List saham di laporan sore otomatis di-sort dari confidence tertinggi ke terendah.
+
+Ambang batas likuiditas (`MIN_LIQUIDITY_RUPIAH` di `bsjp_confidence.py`) dan threshold resistance (di `bsjp_confidence.py`) bisa disesuaikan kalau ternyata kurang pas.
+
+**Tetap diingat**: confidence score ini murni gabungan indikator, BUKAN jaminan harga gak akan turun. Gap-down bisa tetap terjadi karena sentimen global/berita mendadak yang gak bisa diprediksi indikator manapun.
+
+## 8. Yang Bisa Dikembangkan Selanjutnya
 
 - Tambah lebih banyak kode saham di `idx_tickers.py` (`FALLBACK_TICKERS`) kalau mau cakupan lebih luas.
 - Tambah filter likuiditas (minimal volume/value transaksi) biar gak dapat saham gorengan.
