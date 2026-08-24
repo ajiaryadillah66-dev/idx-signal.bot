@@ -44,12 +44,17 @@ python main.py evening   # atau: python main.py morning
 | **⚡ BULLISH ALERT** (intraday) | Baru mulai berbalik naik hari ini | EMA9 cross ke atas EMA21 di data 15 menit + harga naik |
 | **🕯️ CANDLE BULLISH REVERSAL** (khusus pagi) | Candle kemarin (saat market tutup) indikasi pembalikan naik | Doji/Hammer setelah sideway ~1 minggu, sideway ~1 bulan, atau downtrend |
 
-## 6. Data Foreign Flow & Tag BUMN (khusus laporan 15:30)
+## 6. Data Foreign Flow & Tag BUMN
 
-Laporan sore sekarang juga menampilkan:
-- Tag `[asing net buy Rp...]` / `[asing net sell Rp...]` di tiap saham yang muncul di sinyal BUY/REBOUND/SELL
-- Tag `[BUMN]` kalau saham itu BUMN atau anak usaha BUMN
-- Section terpisah "Top Net Foreign Buy/Sell Hari Ini" (top 5 saham dengan net beli/jual asing terbesar, apapun sinyal teknikalnya)
+Kedua laporan (sore & pagi) sekarang nampilin data foreign flow, tapi beda cakupan:
+
+| | Laporan Sore (15:30) | Laporan Pagi (08:15) |
+|---|---|---|
+| Data dari | Hari ini (market masih buka) | Hari trading terakhir (market SUDAH tutup) |
+| Sifat data | Masih bisa berubah dikit sampai closing | **Final/settled** |
+| Top saham ditampilkan | Top 5 buy & top 5 sell | Top 20 buy & top 20 sell (lebih lengkap) |
+
+Tiap saham yang muncul di sinyal BUY/REBOUND/SELL/Candle juga dikasih tag `[asing net buy/sell Rp...]` dan `[BUMN]` kalau relevan.
 
 ⚠️ **Catatan jujur soal data foreign flow**: fungsi ini (`foreign_flow.py`) mengambil data dari endpoint IDX (`GetStockSummary`) berdasarkan pola yang umum dipakai komunitas untuk scraping data ini — **bukan dari dokumentasi API resmi publik IDX**. Kemungkinan ada penyesuaian nama field/parameter yang dibutuhkan setelah kamu coba jalankan (cek log `[foreign_flow]` di output Actions kalau datanya kosong/gagal). Kalau gagal, laporan tetap terkirim tanpa data foreign flow (tidak bikin seluruh proses gagal).
 

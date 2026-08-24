@@ -19,6 +19,24 @@ def _today_str():
     return datetime.now(WIB).strftime("%Y%m%d")
 
 
+def get_previous_trading_day_str():
+    """
+    Cari tanggal trading terakhir (hari sebelumnya, skip Sabtu/Minggu).
+    Dipakai untuk laporan pagi -- pas jam 08:15 WIB, "hari ini" belum ada
+    data (market belum buka), jadi perlu ambil data hari sebelumnya yang
+    sudah final/settled.
+
+    CATATAN: cuma skip Sabtu/Minggu, belum ngecek hari libur nasional/bursa.
+    Kalau hari sebelumnya libur (bukan weekend), data yang diambil mungkin
+    tetap kosong -- ini bakal ke-handle dengan wajar (foreign_flow jadi
+    dict kosong), bukan bikin laporan gagal total.
+    """
+    d = datetime.now(WIB) - timedelta(days=1)
+    while d.weekday() >= 5:  # 5=Sabtu, 6=Minggu
+        d -= timedelta(days=1)
+    return d.strftime("%Y%m%d")
+
+
 def get_foreign_flow(date_str=None, timeout=20):
     """
     Mengembalikan dict {kode_saham: {"foreign_buy": ..., "foreign_sell": ...,

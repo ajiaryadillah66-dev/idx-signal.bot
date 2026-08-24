@@ -26,7 +26,7 @@ from signals import (
 )
 from notifier import send_telegram_message
 from state_store import load_notified_today, save_notified_today
-from foreign_flow import get_foreign_flow, format_rupiah
+from foreign_flow import get_foreign_flow, format_rupiah, get_previous_trading_day_str
 from bumn_list import is_bumn
 from market_context import get_ihsg_trend
 from bsjp_confidence import score_confidence
@@ -185,33 +185,41 @@ def format_daily_message(results: dict, mode: str, foreign_flow: dict = None, ih
             lines.append("*🕯️ CANDLE BULLISH REVERSAL (kemarin)*")
             for code, cp in sorted(candle_patterns.items()):
                 code_short = code.replace(".JK", "")
-                bumn_tag = " [BUMN]" if is_bumn(code_short) else ""
+                tag = _tag_suffix(code_short, foreign_flow)
                 patterns_str = "; ".join(cp["patterns"])
-                lines.append(f"• {code_short} @ {cp['last_close']}{bumn_tag} - {patterns_str}")
+                lines.append(f"• {code_short} @ {cp['last_close']} - {patterns_str}{tag}")
             lines.append("")
 
-    # Section khusus foreign flow, hanya untuk laporan sore
-    if mode == "evening" and foreign_flow:
-        top_buy = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"], reverse=True)[:5]
+    # Section foreign flow: sore pakai data hari itu (masih live saat market
+    # buka), pagi pakai data hari sebelumnya yang SUDAH FINAL setelah market
+    # tutup -- makanya di laporan pagi datanya lebih lengkap & lebih akurat.
+    top_n = 5 if mode == "evening" else 20
+    if foreign_flow:
+        top_buy = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"], reverse=True)[:top_n]
         top_buy = [(c, f) for c, f in top_buy if f["net_foreign"] > 0]
-        top_sell = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"])[:5]
+        top_sell = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"])[:top_n]
         top_sell = [(c, f) for c, f in top_sell if f["net_foreign"] < 0]
 
+        data_note = "data FINAL kemarin (market sudah tutup)" if mode == "morning" else "data hari ini (masih berjalan)"
+        lines.append(f"*🌍 TOP NET FOREIGN BUY* _({data_note})_")
         if top_buy:
-            lines.append("*🌍 TOP NET FOREIGN BUY HARI INI*")
             for code, f in top_buy:
                 bumn_tag = " [BUMN]" if is_bumn(code) else ""
                 lines.append(f"• {code}{bumn_tag}: +{format_rupiah(f['net_foreign'])}")
-            lines.append("")
+        else:
+            lines.append("Tidak ada net foreign buy signifikan.")
+        lines.append("")
 
+        lines.append(f"*🌍 TOP NET FOREIGN SELL* _({data_note})_")
         if top_sell:
-            lines.append("*🌍 TOP NET FOREIGN SELL HARI INI*")
             for code, f in top_sell:
                 bumn_tag = " [BUMN]" if is_bumn(code) else ""
                 lines.append(f"• {code}{bumn_tag}: -{format_rupiah(abs(f['net_foreign']))}")
-            lines.append("")
-    elif mode == "evening" and not foreign_flow:
-        lines.append("_(Data foreign flow hari ini tidak berhasil diambil, laporan tetap lanjut tanpa data ini.)_\n")
+        else:
+            lines.append("Tidak ada net foreign sell signifikan.")
+        lines.append("")
+    else:
+        lines.append("_(Data foreign flow tidak berhasil diambil, laporan tetap lanjut tanpa data ini.)_\n")
 
     lines.append("_Bukan rekomendasi finansial. DYOR._")
     return "\n".join(lines)
@@ -242,7 +250,16 @@ def main():
         return
 
     results, candle_patterns = run_daily_screening(tickers, detect_candles=(mode == "morning"))
-    foreign_flow = get_foreign_flow() if mode == "evening" else {}
+
+    # Foreign flow: sore pakai data hari ini (masih live), pagi pakai data
+    # hari trading terakhir (sudah final karena market sudah tutup semalam)
+    if mode == "evening":
+        foreign_flow = get_foreign_flow()
+    elif mode == "morning":
+        foreign_flow = get_foreign_flow(date_str=get_previous_trading_day_str())
+    else:
+        foreign_flow = {}
+
     ihsg = get_ihsg_trend() if mode == "evening" else None
     message = format_daily_message(results, mode, foreign_flow, ihsg, candle_patterns)
     print(message)
