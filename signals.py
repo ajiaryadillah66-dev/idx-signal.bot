@@ -130,6 +130,21 @@ def compute_intraday_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _candle_shape(o: float, h: float, l: float, c: float):
+    """Cek bentuk candle: Doji (body sangat kecil) & Hammer (sumbu bawah panjang).
+    Dipakai bareng untuk deteksi harian (setelah downtrend) & intraday (saat sideway)."""
+    body = abs(c - o)
+    candle_range = h - l
+    if candle_range <= 0:
+        return False, False
+    upper_shadow = h - max(o, c)
+    lower_shadow = min(o, c) - l
+
+    is_doji = body <= 0.1 * candle_range
+    is_hammer = body > 0 and lower_shadow >= 2 * body and upper_shadow <= 0.3 * body
+    return is_doji, is_hammer
+
+
 def classify_intraday_bullish(df: pd.DataFrame) -> dict:
     """
     Deteksi saham yang BARU SAJA mulai berbalik bullish hari ini (dipakai
@@ -140,6 +155,10 @@ def classify_intraday_bullish(df: pd.DataFrame) -> dict:
     1. Momentum reversal umum: EMA9 cross ke atas EMA21
     2. Breakout dari sideway: harga sempat bergerak di range sempit
        (20 bar terakhir), lalu tembus ke atas range itu dengan volume naik
+
+    Catatan: deteksi candle Doji/Hammer TIDAK dilakukan di sini -- itu
+    khusus dicek dari candle HARIAN saat market tutup, lihat
+    detect_bullish_candle_pattern() di bawah, yang dikirim di laporan pagi.
     """
     required_cols = ["EMA9", "EMA21", "RSI", "RangeHigh20", "RangeLow20", "RangeMean20"]
     if len(df) < 25 or df[required_cols].iloc[-1].isna().any():
@@ -181,42 +200,53 @@ def classify_intraday_bullish(df: pd.DataFrame) -> dict:
 
 def detect_bullish_candle_pattern(df: pd.DataFrame) -> dict:
     """
-    Deteksi pola candle Doji/Hammer pada candle TERAKHIR (candle hari
-    sebelumnya, dipakai untuk laporan pagi sebelum market buka), khusus
-    yang muncul setelah tren turun -- konteks yang bikin pola ini dianggap
-    sinyal pembalikan ke atas (bullish reversal), bukan sekadar pola netral.
+    Deteksi pola candle Doji/Hammer pada candle TERAKHIR (candle harian
+    saat market tutup -- dipakai untuk laporan pagi sebelum market buka
+    besoknya), khusus yang muncul dalam salah satu konteks berikut yang
+    bikin pola ini dianggap sinyal pembalikan ke atas (bukan pola netral):
+
+    1. Baru saja downtrend (5 candle terakhir turun)
+    2. Sideway ~1 minggu (range harga 5 candle SEBELUM candle ini sempit)
+    3. Sideway ~1 bulan (range harga 20 candle SEBELUM candle ini sempit)
 
     Return: {"patterns": [...], "last_close": ...} atau None kalau gak ada
     pola bullish reversal yang terdeteksi.
     """
-    if len(df) < 6:
+    if len(df) < 21:
         return None
 
     last = df.iloc[-1]
     o, h, l, c = float(last["Open"]), float(last["High"]), float(last["Low"]), float(last["Close"])
-    body = abs(c - o)
-    candle_range = h - l
-    if candle_range <= 0:
+    is_doji, is_hammer = _candle_shape(o, h, l, c)
+
+    if not (is_doji or is_hammer):
         return None
 
-    upper_shadow = h - max(o, c)
-    lower_shadow = min(o, c) - l
-
-    # Konteks: apakah 5 candle terakhir (sebelum candle ini) sedang downtrend
+    # Konteks 1: downtrend 5 candle terakhir (tidak termasuk candle ini)
     was_downtrend = float(df["Close"].iloc[-1]) < float(df["Close"].iloc[-6])
 
-    is_doji = body <= 0.1 * candle_range
-    is_hammer = (
-        body > 0
-        and lower_shadow >= 2 * body
-        and upper_shadow <= 0.3 * body
-    )
+    # Konteks 2 & 3: sideway 1 minggu (5 candle) / 1 bulan (20 candle),
+    # dihitung dari candle SEBELUM candle terakhir (biar gak ikut candle
+    # doji/hammer-nya sendiri dalam perhitungan range)
+    prior = df.iloc[:-1]
+    high_5, low_5, mean_5 = prior["High"].iloc[-5:].max(), prior["Low"].iloc[-5:].min(), prior["Close"].iloc[-5:].mean()
+    high_20, low_20, mean_20 = prior["High"].iloc[-20:].max(), prior["Low"].iloc[-20:].min(), prior["Close"].iloc[-20:].mean()
 
+    range_1w_pct = (high_5 - low_5) / mean_5 * 100 if mean_5 > 0 else 999
+    range_1m_pct = (high_20 - low_20) / mean_20 * 100 if mean_20 > 0 else 999
+
+    was_sideways_1w = range_1w_pct < 5
+    was_sideways_1m = range_1m_pct < 8
+
+    candle_name = "Hammer" if is_hammer else "Doji"
     patterns = []
-    if was_downtrend and is_doji:
-        patterns.append("Doji (indikasi keraguan pasar setelah turun, potensi berbalik naik)")
-    if was_downtrend and is_hammer:
-        patterns.append("Hammer (sumbu bawah panjang, potensi rebound)")
+
+    if was_sideways_1w:
+        patterns.append(f"{candle_name} setelah sideway ~1 minggu (range ~{range_1w_pct:.1f}%), potensi mulai breakout naik")
+    elif was_sideways_1m:
+        patterns.append(f"{candle_name} setelah sideway ~1 bulan (range ~{range_1m_pct:.1f}%), potensi mulai breakout naik")
+    elif was_downtrend:
+        patterns.append(f"{candle_name} setelah tren turun, potensi berbalik naik (rebound)")
 
     if not patterns:
         return None

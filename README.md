@@ -42,7 +42,7 @@ python main.py evening   # atau: python main.py morning
 | **REBOUND WATCH** | Kandidat rebound dari oversold | RSI < 35, atau baru saja oversold + mulai ada candle pembalikan |
 | **SELL** | Overbought / momentum melemah | RSI > 70, atau MACD bearish cross |
 | **⚡ BULLISH ALERT** (intraday) | Baru mulai berbalik naik hari ini | EMA9 cross ke atas EMA21 di data 15 menit + harga naik |
-| **🕯️ CANDLE BULLISH REVERSAL** (khusus pagi) | Pola candle kemarin indikasi pembalikan naik | Doji atau Hammer yang muncul setelah tren turun |
+| **🕯️ CANDLE BULLISH REVERSAL** (khusus pagi) | Candle kemarin (saat market tutup) indikasi pembalikan naik | Doji/Hammer setelah sideway ~1 minggu, sideway ~1 bulan, atau downtrend |
 
 ## 6. Data Foreign Flow & Tag BUMN (khusus laporan 15:30)
 
