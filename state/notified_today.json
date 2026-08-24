@@ -1,8 +1,12 @@
 {
   "date": "2026-08-24",
   "tickers": [
+    "AALI.JK",
     "ADRO.JK",
+    "ICBP.JK",
     "PTBA.JK",
+    "SSIA.JK",
+    "TAPG.JK",
     "TLKM.JK"
   ]
 }
