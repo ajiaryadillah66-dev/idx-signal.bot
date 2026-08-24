@@ -4,27 +4,36 @@ on:
   schedule:
     # Semua waktu di bawah pakai UTC. WIB = UTC+7.
 
-    # 1) Jam 15:30 WIB (market masih buka) -> screening BSJP (BUY & REBOUND
+    # 1) Jam 10:00 WIB (market sudah buka ~1 jam) -> volume+harga naik 7
+    #    hari, dibeli asing/BUMN, atau menyentuh support/RSI rendah
+    - cron: "0 3 * * 1-5"
+
+    # 2) Jam 15:30 WIB (market masih buka) -> screening BSJP (BUY & REBOUND
     #    WATCH + confidence score)
     - cron: "30 8 * * 1-5"
 
-    # 2) Jam 15:40 WIB (10 menit setelah laporan BSJP) -> saham kemarin
+    # 3) Jam 15:40 WIB (10 menit setelah laporan BSJP) -> saham kemarin
     #    merah lalu hari ini hijau + volume naik dari rata-rata 1 minggu
     - cron: "40 8 * * 1-5"
 
-    # 3) Jam 08:15 WIB (sebelum market buka) -> screening SELL/overbought
+    # 4) Jam 20:00 WIB (market sudah tutup total) -> rangkuman lengkap 6
+    #    kriteria: support+candle, candle Doji/Hammer, asing+BUMN, RSI
+    #    oversold, volume naik 7 hari, reversal merah-hijau
+    - cron: "0 13 * * 1-5"
+
+    # 5) Jam 08:15 WIB (sebelum market buka) -> screening SELL/overbought
     #    + pola candle Doji/Hammer dari candle penutupan kemarin
     - cron: "15 1 * * 1-5"
 
     # NOTE: alert intraday (tiap 15 menit) DIMATIKAN sesuai permintaan --
-    # sekarang cuma 3 laporan terjadwal per hari (15:30, 15:40, & 08:15).
-    # Mode "intraday" tetap ada di kode dan bisa dites manual lewat
-    # workflow_dispatch di bawah kalau suatu saat mau diaktifkan lagi.
+    # sekarang 5 laporan terjadwal per hari (08:15, 10:00, 15:30, 15:40,
+    # 20:00). Mode "intraday" tetap ada di kode dan bisa dites manual
+    # lewat workflow_dispatch di bawah kalau suatu saat mau diaktifkan lagi.
 
   workflow_dispatch:
     inputs:
       mode:
-        description: "Mode: evening / reversal / morning / intraday"
+        description: "Mode: evening / reversal / morning / midmorning / night / intraday"
         required: false
         default: "evening"
 
@@ -52,10 +61,14 @@ jobs:
           else
             hour=$(date -u +%H)
             minute=$(date -u +%M)
-            if [ "$hour" -eq 8 ] && [ "$minute" -eq 30 ]; then
+            if [ "$hour" -eq 3 ] && [ "$minute" -eq 0 ]; then
+              echo "mode=midmorning" >> $GITHUB_OUTPUT
+            elif [ "$hour" -eq 8 ] && [ "$minute" -eq 30 ]; then
               echo "mode=evening" >> $GITHUB_OUTPUT
             elif [ "$hour" -eq 8 ] && [ "$minute" -eq 40 ]; then
               echo "mode=reversal" >> $GITHUB_OUTPUT
+            elif [ "$hour" -eq 13 ] && [ "$minute" -eq 0 ]; then
+              echo "mode=night" >> $GITHUB_OUTPUT
             elif [ "$hour" -eq 1 ] && [ "$minute" -eq 15 ]; then
               echo "mode=morning" >> $GITHUB_OUTPUT
             else

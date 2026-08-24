@@ -1,9 +1,11 @@
 # IDX Signal Bot
 
 Bot screening otomatis semua saham IDX, kirim notifikasi buy/sell/rebound ke Telegram.
-- **15:30 WIB (market masih buka)**: prediksi saham yang kemungkinan masih lanjut naik besok (BUY & REBOUND WATCH + confidence score), berdasarkan data hari itu sebelum market tutup.
+- **08:15 WIB (sebelum market buka)**: screening sinyal SELL (overbought/momentum melemah) + pola candle Doji/Hammer dari candle kemarin + data foreign flow FINAL.
+- **10:00 WIB (market sudah buka ~1 jam)**: volume naik 1.5x + harga naik 7 hari terakhir, dibeli asing/BUMN, atau menyentuh area support/RSI rendah.
+- **15:30 WIB (market masih buka)**: prediksi saham yang kemungkinan masih lanjut naik besok (BUY & REBOUND WATCH + confidence score).
 - **15:40 WIB**: saham yang kemarin merah lalu hari ini berbalik hijau, dibarengi volume di atas rata-rata 1 minggu terakhir.
-- **08:15 WIB (sebelum market buka)**: screening sinyal SELL (overbought/momentum melemah) + pola candle Doji/Hammer dari candle kemarin + data foreign flow FINAL (lebih lengkap dari laporan sore karena market sudah tutup).
+- **20:00 WIB (market sudah tutup total)**: rangkuman lengkap 6 kriteria sekaligus -- support+candle reversal, candle Doji/Hammer, asing+BUMN, RSI oversold, volume naik 7 hari, dan reversal merah-hijau.
 
 Mode **intraday** (alert real-time tiap 15 menit) masih ada di kode tapi **tidak lagi terjadwal otomatis** -- cuma bisa dites manual lewat tab Actions.
 
@@ -21,11 +23,13 @@ Mode **intraday** (alert real-time tiap 15 menit) masih ada di kode tapi **tidak
 2. Buka **Settings → Secrets and variables → Actions → New repository secret**, tambahkan:
    - `TELEGRAM_BOT_TOKEN` = token dari BotFather
    - `TELEGRAM_CHAT_ID` = chat ID kamu
-3. Selesai — workflow di `.github/workflows/idx-signals.yml` akan otomatis jalan:
+3. Selesai — workflow di `.github/workflows/idx-signals.yml` akan otomatis jalan **5x sehari**:
    - jam 08:15 WIB (sell screening + candle pattern + foreign flow final)
+   - jam 10:00 WIB (volume+harga naik 7 hari, asing+BUMN, support/RSI rendah)
    - jam 15:30 WIB (screening BSJP + confidence score)
    - jam 15:40 WIB (reversal merah-hijau + volume naik)
-4. Mau tes manual? Buka tab **Actions** di repo → pilih workflow **IDX Signal Screening** → **Run workflow** → pilih mode (`evening`/`reversal`/`morning`/`intraday`).
+   - jam 20:00 WIB (rangkuman lengkap 6 kriteria)
+4. Mau tes manual? Buka tab **Actions** di repo → pilih workflow **IDX Signal Screening** → **Run workflow** → pilih mode (`evening`/`reversal`/`morning`/`midmorning`/`night`/`intraday`).
 
 ## 3. Jalankan Manual di Komputer Sendiri (opsional, buat testing)
 
@@ -46,6 +50,11 @@ python main.py evening   # atau: python main.py morning
 | **⚡ BULLISH ALERT** (intraday, manual) | Baru mulai berbalik naik hari ini | EMA9 cross ke atas EMA21 di data 15 menit + harga naik |
 | **🕯️ CANDLE BULLISH REVERSAL** (khusus pagi) | Candle kemarin (saat market tutup) indikasi pembalikan naik | Doji/Hammer setelah sideway ~1 minggu, sideway ~1 bulan, atau downtrend |
 | **🔄 REVERSAL MERAH-HIJAU** (khusus 15:40) | Kemarin turun, hari ini berbalik naik dengan minat beli nyata | Candle kemarin merah, candle hari ini hijau, volume hari ini > rata-rata 1 minggu terakhir |
+| **🎯 SUPPORT + CANDLE** (khusus 20:00) | Harga di area support DAN candle nunjukin pembalikan | Harga dalam 3% dari harga terendah 20 hari + candle Doji/Hammer |
+| **🌍 ASING & BUMN** (10:00 & 20:00) | Saham yang banyak diminati asing, terutama yang BUMN | Top net foreign buy, ditandai [BUMN] kalau relevan |
+| **📉 RSI RENDAH** (khusus 20:00) | Jual jenuh (oversold) | RSI < 30 |
+| **📈 VOLUME NAIK 7 HARI** (khusus 20:00) | Minat beli meningkat selama seminggu | Rata-rata volume 3 hari terakhir > rata-rata 4 hari sebelumnya (dalam window 7 hari) |
+| **📊 VOLUME+HARGA NAIK 7 HARI** (khusus 10:00) | Breakout dikonfirmasi volume & tren harga | Volume hari ini > 1.5x rata-rata 7 hari + harga hari ini > harga 7 hari lalu |
 
 ## 6. Data Foreign Flow & Tag BUMN
 

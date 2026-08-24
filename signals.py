@@ -293,3 +293,118 @@ def detect_red_to_green_volume_reversal(df: pd.DataFrame) -> dict:
         "last_close": round(float(today["Close"]), 2),
         "volume_increase_pct": round(vol_increase_pct, 1),
     }
+
+
+def detect_support_touch(df: pd.DataFrame, threshold_pct: float = 3.0) -> dict:
+    """
+    Cek apakah harga hari ini nyentuh/deket area SUPPORT -- support level
+    dihitung dari harga terendah 20 hari trading terakhir (SEBELUM hari
+    ini). Analog kebalikan dari cek resistance (High20) yang sudah ada.
+
+    Return: {"last_close": ..., "support_level": ..., "distance_pct": ...}
+    atau None kalau harga masih jauh dari support.
+    """
+    if len(df) < 21:
+        return None
+
+    prior_low20 = float(df["Low"].iloc[-21:-1].min())
+    last_close = float(df["Close"].iloc[-1])
+    if prior_low20 <= 0:
+        return None
+
+    distance_pct = (last_close - prior_low20) / prior_low20 * 100
+    if distance_pct > threshold_pct:
+        return None
+
+    return {
+        "last_close": round(last_close, 2),
+        "support_level": round(prior_low20, 2),
+        "distance_pct": round(distance_pct, 2),
+    }
+
+
+def detect_support_with_reversal_candle(df: pd.DataFrame) -> dict:
+    """
+    Kombinasi: harga nyentuh/deket support 20 hari DAN candle hari ini
+    berbentuk Doji/Hammer -- kombinasi yang lebih kuat dibanding cuma
+    nyentuh support doang (candle-nya juga nunjukin tanda pembalikan).
+    """
+    support = detect_support_touch(df)
+    if support is None:
+        return None
+
+    last = df.iloc[-1]
+    o, h, l, c = float(last["Open"]), float(last["High"]), float(last["Low"]), float(last["Close"])
+    is_doji, is_hammer = _candle_shape(o, h, l, c)
+    if not (is_doji or is_hammer):
+        return None
+
+    candle_name = "Hammer" if is_hammer else "Doji"
+    support["candle"] = candle_name
+    return support
+
+
+def detect_rising_volume_trend_7d(df: pd.DataFrame) -> dict:
+    """
+    Cek apakah volume beli cenderung NAIK dalam 7 hari trading terakhir --
+    dibandingkan rata-rata 3 hari terakhir vs rata-rata 4 hari sebelumnya
+    (dalam window 7 hari yang sama). Beda dari volume_spike yang cuma
+    cek 1 hari lonjakan, ini ngecek TREN naiknya selama seminggu.
+
+    Return: {"last_close": ..., "increase_pct": ...} atau None.
+    """
+    if len(df) < 8:
+        return None
+
+    last_7 = df.iloc[-7:]
+    recent_3_avg = last_7["Volume"].iloc[-3:].mean()
+    prior_4_avg = last_7["Volume"].iloc[:-3].mean()
+
+    if pd.isna(prior_4_avg) or prior_4_avg <= 0:
+        return None
+
+    increase_pct = (recent_3_avg / prior_4_avg - 1) * 100
+    if increase_pct <= 10:  # minimal naik 10% biar dianggap "tren naik", bukan noise
+        return None
+
+    return {
+        "last_close": round(float(df["Close"].iloc[-1]), 2),
+        "increase_pct": round(increase_pct, 1),
+    }
+
+
+def detect_volume_price_breakout_7d(df: pd.DataFrame) -> dict:
+    """
+    Cek kombinasi: volume HARI INI > 1.5x rata-rata volume 7 hari
+    sebelumnya, DAN harga hari ini lebih tinggi dari harga 7 hari trading
+    yang lalu (uptrend 7 hari dikonfirmasi lonjakan volume hari ini).
+    Dipakai khusus untuk laporan jam 10 pagi.
+
+    Return: {"last_close": ..., "volume_ratio": ..., "price_change_pct": ...}
+    atau None.
+    """
+    if len(df) < 8:
+        return None
+
+    today = df.iloc[-1]
+    avg_vol_7d = df["Volume"].iloc[-8:-1].mean()
+    if pd.isna(avg_vol_7d) or avg_vol_7d <= 0:
+        return None
+
+    today_volume = float(today["Volume"])
+    volume_ratio = today_volume / avg_vol_7d
+    volume_confirmed = volume_ratio >= 1.5
+
+    price_7d_ago = float(df["Close"].iloc[-8])
+    today_close = float(today["Close"])
+    price_change_pct = (today_close - price_7d_ago) / price_7d_ago * 100 if price_7d_ago > 0 else 0
+    price_up_7d = today_close > price_7d_ago
+
+    if not (volume_confirmed and price_up_7d):
+        return None
+
+    return {
+        "last_close": round(today_close, 2),
+        "volume_ratio": round(volume_ratio, 2),
+        "price_change_pct": round(price_change_pct, 1),
+    }
