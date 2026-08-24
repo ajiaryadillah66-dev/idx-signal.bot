@@ -8,19 +8,23 @@ on:
     #    WATCH + confidence score)
     - cron: "30 8 * * 1-5"
 
-    # 2) Jam 08:15 WIB (sebelum market buka) -> screening SELL/overbought
+    # 2) Jam 15:40 WIB (10 menit setelah laporan BSJP) -> saham kemarin
+    #    merah lalu hari ini hijau + volume naik dari rata-rata 1 minggu
+    - cron: "40 8 * * 1-5"
+
+    # 3) Jam 08:15 WIB (sebelum market buka) -> screening SELL/overbought
     #    + pola candle Doji/Hammer dari candle penutupan kemarin
     - cron: "15 1 * * 1-5"
 
     # NOTE: alert intraday (tiap 15 menit) DIMATIKAN sesuai permintaan --
-    # sekarang cuma 2 laporan terjadwal per hari (15:30 & 08:15). Mode
-    # "intraday" tetap ada di kode dan bisa dites manual lewat
+    # sekarang cuma 3 laporan terjadwal per hari (15:30, 15:40, & 08:15).
+    # Mode "intraday" tetap ada di kode dan bisa dites manual lewat
     # workflow_dispatch di bawah kalau suatu saat mau diaktifkan lagi.
 
   workflow_dispatch:
     inputs:
       mode:
-        description: "Mode: evening / morning / intraday"
+        description: "Mode: evening / reversal / morning / intraday"
         required: false
         default: "evening"
 
@@ -50,6 +54,8 @@ jobs:
             minute=$(date -u +%M)
             if [ "$hour" -eq 8 ] && [ "$minute" -eq 30 ]; then
               echo "mode=evening" >> $GITHUB_OUTPUT
+            elif [ "$hour" -eq 8 ] && [ "$minute" -eq 40 ]; then
+              echo "mode=reversal" >> $GITHUB_OUTPUT
             elif [ "$hour" -eq 1 ] && [ "$minute" -eq 15 ]; then
               echo "mode=morning" >> $GITHUB_OUTPUT
             else

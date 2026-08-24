@@ -252,3 +252,44 @@ def detect_bullish_candle_pattern(df: pd.DataFrame) -> dict:
         return None
 
     return {"patterns": patterns, "last_close": round(c, 2)}
+
+
+def detect_red_to_green_volume_reversal(df: pd.DataFrame) -> dict:
+    """
+    Deteksi saham yang candle KEMARIN merah (close < open, artinya turun),
+    lalu candle HARI INI berbalik hijau (close > open, artinya naik),
+    DIBARENGI volume hari ini di atas rata-rata volume 1 minggu (5 hari
+    trading) terakhir -- indikasi minat beli nyata, bukan cuma naik tipis
+    tanpa dukungan volume.
+
+    Dipakai untuk laporan jam 15:40 WIB (10 menit setelah laporan BSJP).
+
+    Return: {"last_close": ..., "volume_increase_pct": ...} atau None
+    kalau kriteria gak terpenuhi.
+    """
+    if len(df) < 7:
+        return None
+
+    yesterday = df.iloc[-2]
+    today = df.iloc[-1]
+
+    yesterday_red = float(yesterday["Close"]) < float(yesterday["Open"])
+    today_green = float(today["Close"]) > float(today["Open"])
+
+    # Rata-rata volume 5 hari SEBELUM hari ini (tidak termasuk hari ini)
+    avg_vol_1w = df["Volume"].iloc[-6:-1].mean()
+    if pd.isna(avg_vol_1w) or avg_vol_1w <= 0:
+        return None
+
+    today_volume = float(today["Volume"])
+    volume_up = today_volume > avg_vol_1w
+
+    if not (yesterday_red and today_green and volume_up):
+        return None
+
+    vol_increase_pct = (today_volume / avg_vol_1w - 1) * 100
+
+    return {
+        "last_close": round(float(today["Close"]), 2),
+        "volume_increase_pct": round(vol_increase_pct, 1),
+    }

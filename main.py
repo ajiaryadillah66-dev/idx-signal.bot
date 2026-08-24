@@ -4,12 +4,16 @@ Script utama: screening seluruh saham IDX, hitung sinyal, kirim ke Telegram.
 Mode:
 - "evening"  : jam 15:30 WIB (market masih buka, sebelum tutup) -> prediksi
                saham yang kemungkinan masih lanjut naik besok (BUY / REBOUND WATCH)
+- "reversal" : jam 15:40 WIB -> saham yang kemarin merah lalu hari ini
+               hijau, dibarengi volume di atas rata-rata 1 minggu terakhir
 - "morning"  : jam 08:15 WIB (sebelum market buka) -> cek sinyal SELL/overbought
-- "intraday" : tiap 15 menit selama jam trading (09:00-15:30 WIB) -> alert
-               real-time begitu ada saham yang mulai bullish hari itu
+               + pola candle Doji/Hammer + data foreign flow final kemarin
+- "intraday" : mode manual (gak lagi terjadwal otomatis) -> alert real-time
+               begitu ada saham yang mulai bullish hari itu
 
 Penggunaan manual:
     python main.py evening
+    python main.py reversal
     python main.py morning
     python main.py intraday
 """
@@ -22,7 +26,7 @@ from idx_tickers import get_idx_tickers
 from signals import (
     compute_indicators, classify_signal,
     compute_intraday_indicators, classify_intraday_bullish,
-    detect_bullish_candle_pattern,
+    detect_bullish_candle_pattern, detect_red_to_green_volume_reversal,
 )
 from notifier import send_telegram_message
 from state_store import load_notified_today, save_notified_today
@@ -96,6 +100,34 @@ def run_intraday_scan(tickers):
 
     save_notified_today(already_notified)
     return new_bullish
+
+
+def run_reversal_scan(tickers):
+    """Dipakai untuk mode reversal (jam 15:40): saham merah->hijau + volume naik."""
+    raw = _download_batches(tickers, HISTORY_PERIOD, "1d")
+    results = {}
+    for t, df in raw.items():
+        r = detect_red_to_green_volume_reversal(df)
+        if r:
+            results[t] = r
+    return results
+
+
+def format_reversal_message(results: dict, foreign_flow: dict = None) -> str:
+    foreign_flow = foreign_flow or {}
+    lines = ["🔄 *15:40 WIB - Reversal Merah ke Hijau + Volume Naik*", ""]
+    if results:
+        for code, info in sorted(results.items(), key=lambda x: -x[1]["volume_increase_pct"]):
+            code_short = code.replace(".JK", "")
+            tag = _tag_suffix(code_short, foreign_flow)
+            lines.append(
+                f"• {code_short} @ {info['last_close']} - volume +{info['volume_increase_pct']}% "
+                f"dari rata-rata 1 minggu terakhir{tag}"
+            )
+    else:
+        lines.append("Tidak ada saham yang memenuhi kriteria hari ini.")
+    lines.append("\n_Bukan rekomendasi finansial. DYOR._")
+    return "\n".join(lines)
 
 
 def _tag_suffix(code_no_suffix: str, foreign_flow: dict) -> str:
@@ -247,6 +279,14 @@ def main():
             send_telegram_message(message)
         else:
             print("[main] Tidak ada sinyal bullish baru saat ini.")
+        return
+
+    if mode == "reversal":
+        results = run_reversal_scan(tickers)
+        foreign_flow = get_foreign_flow()
+        message = format_reversal_message(results, foreign_flow)
+        print(message)
+        send_telegram_message(message)
         return
 
     results, candle_patterns = run_daily_screening(tickers, detect_candles=(mode == "morning"))
