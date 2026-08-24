@@ -4,22 +4,25 @@ on:
   schedule:
     # Semua waktu di bawah pakai UTC. WIB = UTC+7.
 
-    # 1) Jam 15:30 WIB (market masih buka) -> prediksi saham lanjut naik besok
+    # 1) Jam 15:30 WIB (market masih buka) -> screening BSJP (BUY & REBOUND
+    #    WATCH + confidence score)
     - cron: "30 8 * * 1-5"
 
-    # 2) Jam 08:15 WIB (sebelum market buka) -> screening sell/overbought
+    # 2) Jam 08:15 WIB (sebelum market buka) -> screening SELL/overbought
+    #    + pola candle Doji/Hammer dari candle penutupan kemarin
     - cron: "15 1 * * 1-5"
 
-    # 3) Tiap 15 menit selama jam trading (09:00-15:30 WIB = 02:00-08:30 UTC)
-    #    -> alert real-time begitu ada saham mulai bullish
-    - cron: "*/15 2-8 * * 1-5"
+    # NOTE: alert intraday (tiap 15 menit) DIMATIKAN sesuai permintaan --
+    # sekarang cuma 2 laporan terjadwal per hari (15:30 & 08:15). Mode
+    # "intraday" tetap ada di kode dan bisa dites manual lewat
+    # workflow_dispatch di bawah kalau suatu saat mau diaktifkan lagi.
 
   workflow_dispatch:
     inputs:
       mode:
         description: "Mode: evening / morning / intraday"
         required: false
-        default: "intraday"
+        default: "evening"
 
 permissions:
   contents: write   # perlu buat commit balik state/notified_today.json
