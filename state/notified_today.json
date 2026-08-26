@@ -1,8 +1,12 @@
 {
   "date": "2026-08-26",
   "tickers": [
+    "BJTM.JK",
     "BSDE.JK",
     "BYAN.JK",
-    "DSNG.JK"
+    "DSNG.JK",
+    "MTDL.JK",
+    "STAA.JK",
+    "TLKM.JK"
   ]
 }
