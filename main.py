@@ -1,55 +1,43 @@
 """
-Script utama: screening seluruh saham IDX, hitung sinyal, kirim ke Telegram.
+Screener saham IDX (rebuild dari awal) -- jalan tiap 1 jam selama jam
+trading (09:00, 10:00, 11:00, 13:00, 14:00, 15:00 WIB), cek 5 kriteria,
+dan kirim notifikasi Telegram SETIAP KALI ada saham yang kena kriteria.
 
-Mode:
-- "evening"     : jam 15:30 WIB (market masih buka, sebelum tutup) -> prediksi
-                  saham yang kemungkinan masih lanjut naik besok (BUY / REBOUND WATCH)
-- "reversal"    : jam 15:40 WIB -> saham yang kemarin merah lalu hari ini
-                  hijau, dibarengi volume di atas rata-rata 1 minggu terakhir
-- "morning"     : jam 08:15 WIB (sebelum market buka) -> cek sinyal SELL/overbought
-                  + pola candle Doji/Hammer + data foreign flow final kemarin
-- "midmorning"  : jam 10:00 WIB -> volume naik 1.5x + harga naik 7 hari,
-                  dibeli asing/BUMN, atau menyentuh support/RSI rendah
-- "night"       : jam 20:00 WIB -> rangkuman lengkap 6 kriteria (support+candle,
-                  candle reversal, asing+BUMN, RSI oversold, volume naik 7 hari,
-                  reversal merah-hijau)
-- "intraday"    : mode manual (gak lagi terjadwal otomatis) -> alert real-time
-                  begitu ada saham yang mulai bullish hari itu
+TIDAK ADA dedup/state -- saham yang sama bisa muncul lagi di jam
+berikutnya kalau masih memenuhi kriteria (sesuai permintaan).
+
+Kriteria yang dicek:
+1. Support + candle Doji/Hammer
+2. Candle Doji/Hammer (setelah downtrend / sideway ~1 minggu / ~1 bulan)
+3. Reversal candle merah->hijau + volume naik dari rata-rata 1 minggu
+4. RSI rendah (oversold, < 30)
+5. Dibeli asing & BUMN (net foreign buy positif, ditandai [BUMN])
 
 Penggunaan manual:
-    python main.py evening
-    python main.py reversal
-    python main.py morning
-    python main.py midmorning
-    python main.py night
-    python main.py intraday
+    python main.py
 """
 
-import sys
 import time
 import yfinance as yf
-import pandas as pd
 
 from idx_tickers import get_idx_tickers
 from signals import (
-    compute_indicators, classify_signal,
-    compute_intraday_indicators, classify_intraday_bullish,
-    detect_bullish_candle_pattern, detect_red_to_green_volume_reversal,
-    detect_support_touch, detect_support_with_reversal_candle,
-    detect_rising_volume_trend_7d, detect_volume_price_breakout_7d,
+    detect_bullish_candle_pattern,
+    detect_support_with_reversal_candle,
+    detect_red_to_green_volume_reversal,
+    get_last_rsi,
 )
 from notifier import send_telegram_message
-from state_store import load_notified_today, save_notified_today
-from foreign_flow import get_foreign_flow, format_rupiah, get_previous_trading_day_str
+from foreign_flow import get_foreign_flow, format_rupiah
 from bumn_list import is_bumn
-from market_context import get_ihsg_trend
-from bsjp_confidence import score_confidence
 
 BATCH_SIZE = 50
 HISTORY_PERIOD = "6mo"
+RSI_OVERSOLD_THRESHOLD = 30
+TOP_FOREIGN_BUY_N = 20
 
 
-def _download_batches(tickers, period, interval):
+def _download_batches(tickers, period=HISTORY_PERIOD, interval="1d"):
     all_data = {}
     for i in range(0, len(tickers), BATCH_SIZE):
         batch = tickers[i:i + BATCH_SIZE]
@@ -73,430 +61,95 @@ def _download_batches(tickers, period, interval):
     return all_data
 
 
-def run_daily_screening(tickers, detect_candles=False):
-    """Dipakai untuk mode evening & morning (basis data harian).
-    Kalau detect_candles=True (mode pagi), sekalian scan pola candle
-    Doji/Hammer bullish reversal di semua saham (bukan cuma yang punya
-    sinyal teknikal lain), pakai data yang sama tanpa download ulang."""
-    raw = _download_batches(tickers, HISTORY_PERIOD, "1d")
-    results = {}
-    candle_patterns = {}
+def _tag_bumn(code_short: str) -> str:
+    return " [BUMN]" if is_bumn(code_short) else ""
+
+
+def run_screener(tickers):
+    raw = _download_batches(tickers)
+    results = {
+        "support_candle": {},
+        "candle_pattern": {},
+        "red_to_green": {},
+        "rsi_oversold": {},
+    }
     for t, df in raw.items():
-        df_ind = compute_indicators(df)
-        res = classify_signal(df_ind)
-        if res["signal"]:
-            results[t] = res
-        if detect_candles:
-            cp = detect_bullish_candle_pattern(df)
-            if cp:
-                candle_patterns[t] = cp
-    return results, candle_patterns
-
-
-def run_intraday_scan(tickers):
-    """Dipakai untuk mode intraday (basis data 15 menit, hanya sinyal bullish baru)."""
-    raw = _download_batches(tickers, "5d", "15m")
-    already_notified = load_notified_today()
-    new_bullish = {}
-
-    for t, df in raw.items():
-        if t in already_notified:
-            continue
-        df_ind = compute_intraday_indicators(df)
-        res = classify_intraday_bullish(df_ind)
-        if res["bullish"]:
-            new_bullish[t] = res
-            already_notified.add(t)
-
-    save_notified_today(already_notified)
-    return new_bullish
-
-
-def run_reversal_scan(tickers):
-    """Dipakai untuk mode reversal (jam 15:40): saham merah->hijau + volume naik."""
-    raw = _download_batches(tickers, HISTORY_PERIOD, "1d")
-    results = {}
-    for t, df in raw.items():
-        r = detect_red_to_green_volume_reversal(df)
-        if r:
-            results[t] = r
-    return results
-
-
-def run_night_screening(tickers):
-    """
-    Dipakai untuk mode night (jam 20:00): rangkuman 6 kriteria sekaligus.
-    Return dict berisi 6 kategori: support_candle, candle_pattern,
-    asing_bumn (pakai foreign_flow terpisah di main()), rsi_oversold,
-    volume_rising, red_to_green.
-    """
-    raw = _download_batches(tickers, HISTORY_PERIOD, "1d")
-    support_candle = {}
-    candle_pattern = {}
-    rsi_oversold = {}
-    volume_rising = {}
-    red_to_green = {}
-
-    for t, df in raw.items():
-        df_ind = compute_indicators(df)
-
         sc = detect_support_with_reversal_candle(df)
         if sc:
-            support_candle[t] = sc
+            results["support_candle"][t] = sc
 
         cp = detect_bullish_candle_pattern(df)
         if cp:
-            candle_pattern[t] = cp
-
-        last_rsi = df_ind["RSI"].iloc[-1]
-        if pd.notna(last_rsi) and last_rsi < 30:
-            rsi_oversold[t] = {
-                "last_close": round(float(df["Close"].iloc[-1]), 2),
-                "rsi": round(float(last_rsi), 1),
-            }
-
-        vr = detect_rising_volume_trend_7d(df)
-        if vr:
-            volume_rising[t] = vr
+            results["candle_pattern"][t] = cp
 
         rtg = detect_red_to_green_volume_reversal(df)
         if rtg:
-            red_to_green[t] = rtg
+            results["red_to_green"][t] = rtg
 
-    return {
-        "support_candle": support_candle,
-        "candle_pattern": candle_pattern,
-        "rsi_oversold": rsi_oversold,
-        "volume_rising": volume_rising,
-        "red_to_green": red_to_green,
-    }
-
-
-def run_midmorning_screening(tickers):
-    """
-    Dipakai untuk mode midmorning (jam 10:00): 3 kriteria -- volume+harga
-    naik 7 hari, (asing+BUMN dicek terpisah di main() pakai foreign_flow),
-    dan menyentuh support atau RSI rendah.
-    """
-    raw = _download_batches(tickers, HISTORY_PERIOD, "1d")
-    volume_price_up = {}
-    support_or_oversold = {}
-
-    for t, df in raw.items():
-        df_ind = compute_indicators(df)
-
-        vp = detect_volume_price_breakout_7d(df)
-        if vp:
-            volume_price_up[t] = vp
-
-        support = detect_support_touch(df)
-        last_rsi = df_ind["RSI"].iloc[-1]
-        is_oversold = pd.notna(last_rsi) and last_rsi < 30
-        if support or is_oversold:
-            entry = {"last_close": round(float(df["Close"].iloc[-1]), 2)}
-            reasons = []
-            if support:
-                reasons.append(f"dekat support {support['support_level']} (jarak {support['distance_pct']}%)")
-            if is_oversold:
-                reasons.append(f"RSI rendah ({last_rsi:.1f})")
-            entry["reasons"] = reasons
-            support_or_oversold[t] = entry
-
-    return {"volume_price_up": volume_price_up, "support_or_oversold": support_or_oversold}
+        rsi = get_last_rsi(df)
+        if rsi is not None and rsi < RSI_OVERSOLD_THRESHOLD:
+            results["rsi_oversold"][t] = {
+                "last_close": round(float(df["Close"].iloc[-1]), 2),
+                "rsi": round(rsi, 1),
+            }
+    return results
 
 
-def format_night_message(scan: dict, foreign_flow: dict = None) -> str:
-    foreign_flow = foreign_flow or {}
-    lines = ["🌙 *20:00 WIB - Rangkuman Screening Malam*", ""]
+def format_message(results: dict, foreign_flow: dict) -> str:
+    lines = ["📡 *Screening Saham IDX*", ""]
+    any_result = False
 
     def section(title, items, line_fn):
+        nonlocal any_result
         if not items:
             return
+        any_result = True
         lines.append(f"*{title}*")
         for code, info in sorted(items.items()):
             code_short = code.replace(".JK", "")
-            tag = _tag_suffix(code_short, foreign_flow)
-            lines.append(f"• {line_fn(code_short, info)}{tag}")
+            lines.append(f"• {line_fn(code_short, info)}{_tag_bumn(code_short)}")
         lines.append("")
 
-    section("🎯 SUPPORT + CANDLE REVERSAL", scan["support_candle"],
-             lambda c, i: f"{c} @ {i['last_close']} - candle {i['candle']} di support {i['support_level']} (jarak {i['distance_pct']}%)")
-
-    section("🕯️ CANDLE DOJI/HAMMER", scan["candle_pattern"],
-             lambda c, i: f"{c} @ {i['last_close']} - {'; '.join(i['patterns'])}")
-
-    # Asing & BUMN: pakai top net foreign buy, tandain yang BUMN
-    if foreign_flow:
-        top_buy = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"], reverse=True)[:15]
-        top_buy = [(c, f) for c, f in top_buy if f["net_foreign"] > 0]
-        if top_buy:
-            lines.append("*🌍 BANYAK DIBELI ASING & BUMN*")
-            for code, f in top_buy:
-                bumn_tag = " [BUMN]" if is_bumn(code) else ""
-                lines.append(f"• {code}{bumn_tag}: net buy +{format_rupiah(f['net_foreign'])}")
-            lines.append("")
-
-    section("📉 RSI RENDAH (JUAL JENUH)", scan["rsi_oversold"],
-             lambda c, i: f"{c} @ {i['last_close']} - RSI {i['rsi']}")
-
-    section("📈 VOLUME NAIK 7 HARI TERAKHIR", scan["volume_rising"],
-             lambda c, i: f"{c} @ {i['last_close']} - volume naik {i['increase_pct']}%")
-
-    section("🔄 CANDLE HIJAU SETELAH MERAH", scan["red_to_green"],
-             lambda c, i: f"{c} @ {i['last_close']} - volume +{i['volume_increase_pct']}% dari rata-rata 1 minggu")
-
-    if not any(scan.values()) and not foreign_flow:
-        lines.append("Tidak ada saham yang memenuhi kriteria apapun hari ini.")
-
-    lines.append("_Bukan rekomendasi finansial. DYOR._")
-    return "\n".join(lines)
-
-
-def format_midmorning_message(scan: dict, foreign_flow: dict = None) -> str:
-    foreign_flow = foreign_flow or {}
-    lines = ["☀️ *10:00 WIB - Screening Pagi*", ""]
-
-    vp = scan["volume_price_up"]
-    if vp:
-        lines.append("*📊 VOLUME 1.5x + HARGA NAIK (7 HARI)*")
-        for code, info in sorted(vp.items(), key=lambda x: -x[1]["volume_ratio"]):
-            code_short = code.replace(".JK", "")
-            tag = _tag_suffix(code_short, foreign_flow)
-            lines.append(f"• {code_short} @ {info['last_close']} - volume {info['volume_ratio']}x, harga +{info['price_change_pct']}% (7 hari){tag}")
-        lines.append("")
+    section(
+        "🎯 SUPPORT + CANDLE REVERSAL", results["support_candle"],
+        lambda c, i: f"{c} @ {i['last_close']} - candle {i['candle']} di support {i['support_level']} (jarak {i['distance_pct']}%)",
+    )
+    section(
+        "🕯️ CANDLE DOJI/HAMMER", results["candle_pattern"],
+        lambda c, i: f"{c} @ {i['last_close']} - {'; '.join(i['patterns'])}",
+    )
+    section(
+        "🔄 REVERSAL MERAH KE HIJAU", results["red_to_green"],
+        lambda c, i: f"{c} @ {i['last_close']} - volume +{i['volume_increase_pct']}% dari rata-rata 1 minggu",
+    )
+    section(
+        "📉 RSI RENDAH (OVERSOLD)", results["rsi_oversold"],
+        lambda c, i: f"{c} @ {i['last_close']} - RSI {i['rsi']}",
+    )
 
     if foreign_flow:
-        top_buy = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"], reverse=True)[:15]
-        top_buy = [(c, f) for c, f in top_buy if f["net_foreign"] > 0]
+        top_buy = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"], reverse=True)
+        top_buy = [(c, f) for c, f in top_buy if f["net_foreign"] > 0][:TOP_FOREIGN_BUY_N]
         if top_buy:
-            lines.append("*🌍 DIBELI BROKER ASING & BUMN*")
+            any_result = True
+            lines.append("*🌍 DIBELI ASING & BUMN*")
             for code, f in top_buy:
-                bumn_tag = " [BUMN]" if is_bumn(code) else ""
-                lines.append(f"• {code}{bumn_tag}: net buy +{format_rupiah(f['net_foreign'])}")
+                lines.append(f"• {code}{_tag_bumn(code)}: net buy +{format_rupiah(f['net_foreign'])}")
             lines.append("")
 
-    so = scan["support_or_oversold"]
-    if so:
-        lines.append("*🎯 MENYENTUH SUPPORT ATAU RSI RENDAH*")
-        for code, info in sorted(so.items()):
-            code_short = code.replace(".JK", "")
-            tag = _tag_suffix(code_short, foreign_flow)
-            reasons = "; ".join(info["reasons"])
-            lines.append(f"• {code_short} @ {info['last_close']} - {reasons}{tag}")
-        lines.append("")
-
-    if not vp and not so and not foreign_flow:
-        lines.append("Tidak ada saham yang memenuhi kriteria apapun saat ini.")
+    if not any_result:
+        lines.append("Tidak ada saham yang memenuhi kriteria saat ini.")
 
     lines.append("_Bukan rekomendasi finansial. DYOR._")
-    return "\n".join(lines)
-
-
-def format_reversal_message(results: dict, foreign_flow: dict = None) -> str:
-    foreign_flow = foreign_flow or {}
-    lines = ["🔄 *15:40 WIB - Reversal Merah ke Hijau + Volume Naik*", ""]
-    if results:
-        for code, info in sorted(results.items(), key=lambda x: -x[1]["volume_increase_pct"]):
-            code_short = code.replace(".JK", "")
-            tag = _tag_suffix(code_short, foreign_flow)
-            lines.append(
-                f"• {code_short} @ {info['last_close']} - volume +{info['volume_increase_pct']}% "
-                f"dari rata-rata 1 minggu terakhir{tag}"
-            )
-    else:
-        lines.append("Tidak ada saham yang memenuhi kriteria hari ini.")
-    lines.append("\n_Bukan rekomendasi finansial. DYOR._")
-    return "\n".join(lines)
-
-
-def _tag_suffix(code_no_suffix: str, foreign_flow: dict) -> str:
-    """Bikin tag tambahan '[BUMN]' dan/atau info net foreign buy/sell."""
-    tags = []
-    if is_bumn(code_no_suffix):
-        tags.append("BUMN")
-    flow = foreign_flow.get(code_no_suffix)
-    if flow:
-        net = flow["net_foreign"]
-        if net > 0:
-            tags.append(f"asing net buy {format_rupiah(net)}")
-        elif net < 0:
-            tags.append(f"asing net sell {format_rupiah(abs(net))}")
-    return f" [{', '.join(tags)}]" if tags else ""
-
-
-def format_daily_message(results: dict, mode: str, foreign_flow: dict = None, ihsg: dict = None,
-                          candle_patterns: dict = None) -> str:
-    foreign_flow = foreign_flow or {}
-    ihsg = ihsg or {"trend": "unknown"}
-    candle_patterns = candle_patterns or {}
-    buys = {k: v for k, v in results.items() if v["signal"] == "BUY"}
-    rebounds = {k: v for k, v in results.items() if v["signal"] == "REBOUND_WATCH"}
-    sells = {k: v for k, v in results.items() if v["signal"] == "SELL"}
-
-    lines = []
-
-    def section_plain(title, items):
-        if not items:
-            return
-        lines.append(f"*{title}*")
-        for code, info in sorted(items.items()):
-            reasons = "; ".join(info["reasons"])
-            code_short = code.replace(".JK", "")
-            tag = _tag_suffix(code_short, foreign_flow)
-            lines.append(f"• {code_short} @ {info['last_close']} (RSI {info['rsi']}) - {reasons}{tag}")
-        lines.append("")
-
-    def section_with_confidence(title, items):
-        """Khusus BUY & REBOUND WATCH di laporan sore: dikasih skor confidence & di-sort."""
-        if not items:
-            return
-        scored = []
-        for code, info in items.items():
-            code_short = code.replace(".JK", "")
-            conf = score_confidence(code_short, info, foreign_flow, ihsg["trend"])
-            scored.append((code_short, info, conf))
-
-        order = {"Tinggi": 0, "Sedang": 1, "Rendah": 2}
-        scored.sort(key=lambda x: (order[x[2]["level"]], x[0]))
-
-        lines.append(f"*{title}*")
-        for code_short, info, conf in scored:
-            reasons = "; ".join(info["reasons"])
-            bumn_tag = " [BUMN]" if is_bumn(code_short) else ""
-            flow = foreign_flow.get(code_short)
-            flow_tag = ""
-            if flow:
-                flow_tag = f", asing net {'buy' if flow['net_foreign'] > 0 else 'sell'} {format_rupiah(abs(flow['net_foreign']))}"
-            lines.append(f"• {code_short} @ {info['last_close']} (RSI {info['rsi']}) - Confidence: *{conf['level']}*{bumn_tag}{flow_tag}")
-            lines.append(f"   _{reasons}_")
-            if conf["cautions"]:
-                lines.append(f"   ⚠️ {'; '.join(conf['cautions'])}")
-        lines.append("")
-
-    if mode == "evening":
-        # Sore: fokus HANYA ke kemungkinan saham masih naik besok -> BUY & REBOUND WATCH saja
-        lines.append("🌆 *15:30 WIB - Prediksi Saham Lanjut Naik Besok*")
-        if ihsg["trend"] != "unknown":
-            lines.append(f"_Kondisi IHSG hari ini: {ihsg['trend'].upper()}_")
-        lines.append("")
-        section_with_confidence("✅ BUY", buys)
-        section_with_confidence("👀 REBOUND WATCH", rebounds)
-        if not (buys or rebounds):
-            lines.append("Tidak ada saham dengan potensi lanjut naik besok.")
-    else:
-        # Pagi: fokus HANYA ke sinyal jual/overbought
-        lines.append("🌅 *PAGI - Screening Jual/Overbought*")
-        lines.append("")
-        section_plain("🔻 SELL / OVERBOUGHT", sells)
-        if not sells:
-            lines.append("Tidak ada sinyal jual/overbought signifikan.")
-
-        # Section baru: pola candle Doji/Hammer bullish reversal (candle kemarin)
-        if candle_patterns:
-            lines.append("*🕯️ CANDLE BULLISH REVERSAL (kemarin)*")
-            for code, cp in sorted(candle_patterns.items()):
-                code_short = code.replace(".JK", "")
-                tag = _tag_suffix(code_short, foreign_flow)
-                patterns_str = "; ".join(cp["patterns"])
-                lines.append(f"• {code_short} @ {cp['last_close']} - {patterns_str}{tag}")
-            lines.append("")
-
-    # Section foreign flow: sore pakai data hari itu (masih live saat market
-    # buka), pagi pakai data hari sebelumnya yang SUDAH FINAL setelah market
-    # tutup -- makanya di laporan pagi datanya lebih lengkap & lebih akurat.
-    top_n = 5 if mode == "evening" else 20
-    if foreign_flow:
-        top_buy = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"], reverse=True)[:top_n]
-        top_buy = [(c, f) for c, f in top_buy if f["net_foreign"] > 0]
-        top_sell = sorted(foreign_flow.items(), key=lambda x: x[1]["net_foreign"])[:top_n]
-        top_sell = [(c, f) for c, f in top_sell if f["net_foreign"] < 0]
-
-        data_note = "data FINAL kemarin (market sudah tutup)" if mode == "morning" else "data hari ini (masih berjalan)"
-        lines.append(f"*🌍 TOP NET FOREIGN BUY* _({data_note})_")
-        if top_buy:
-            for code, f in top_buy:
-                bumn_tag = " [BUMN]" if is_bumn(code) else ""
-                lines.append(f"• {code}{bumn_tag}: +{format_rupiah(f['net_foreign'])}")
-        else:
-            lines.append("Tidak ada net foreign buy signifikan.")
-        lines.append("")
-
-        lines.append(f"*🌍 TOP NET FOREIGN SELL* _({data_note})_")
-        if top_sell:
-            for code, f in top_sell:
-                bumn_tag = " [BUMN]" if is_bumn(code) else ""
-                lines.append(f"• {code}{bumn_tag}: -{format_rupiah(abs(f['net_foreign']))}")
-        else:
-            lines.append("Tidak ada net foreign sell signifikan.")
-        lines.append("")
-    else:
-        lines.append("_(Data foreign flow tidak berhasil diambil, laporan tetap lanjut tanpa data ini.)_\n")
-
-    lines.append("_Bukan rekomendasi finansial. DYOR._")
-    return "\n".join(lines)
-
-
-def format_intraday_message(results: dict) -> str:
-    lines = ["⚡ *ALERT: Mulai Bullish Hari Ini*", ""]
-    for code, info in sorted(results.items()):
-        reasons = "; ".join(info["reasons"])
-        lines.append(f"• {code.replace('.JK','')} @ {info['last_price']} (RSI {info['rsi']}) - {reasons}")
-    lines.append("\n_Bukan rekomendasi finansial. DYOR._")
     return "\n".join(lines)
 
 
 def main():
-    mode = sys.argv[1] if len(sys.argv) > 1 else "evening"
     tickers = get_idx_tickers()
-    print(f"[main] Mode={mode}, total saham dipantau: {len(tickers)}")
-
-    if mode == "intraday":
-        results = run_intraday_scan(tickers)
-        if results:
-            message = format_intraday_message(results)
-            print(message)
-            send_telegram_message(message)
-        else:
-            print("[main] Tidak ada sinyal bullish baru saat ini.")
-        return
-
-    if mode == "reversal":
-        results = run_reversal_scan(tickers)
-        foreign_flow = get_foreign_flow()
-        message = format_reversal_message(results, foreign_flow)
-        print(message)
-        send_telegram_message(message)
-        return
-
-    if mode == "night":
-        scan = run_night_screening(tickers)
-        foreign_flow = get_foreign_flow()
-        message = format_night_message(scan, foreign_flow)
-        print(message)
-        send_telegram_message(message)
-        return
-
-    if mode == "midmorning":
-        scan = run_midmorning_screening(tickers)
-        foreign_flow = get_foreign_flow()
-        message = format_midmorning_message(scan, foreign_flow)
-        print(message)
-        send_telegram_message(message)
-        return
-
-    results, candle_patterns = run_daily_screening(tickers, detect_candles=(mode == "morning"))
-
-    # Foreign flow: sore pakai data hari ini (masih live), pagi pakai data
-    # hari trading terakhir (sudah final karena market sudah tutup semalam)
-    if mode == "evening":
-        foreign_flow = get_foreign_flow()
-    elif mode == "morning":
-        foreign_flow = get_foreign_flow(date_str=get_previous_trading_day_str())
-    else:
-        foreign_flow = {}
-
-    ihsg = get_ihsg_trend() if mode == "evening" else None
-    message = format_daily_message(results, mode, foreign_flow, ihsg, candle_patterns)
+    print(f"[main] Screening {len(tickers)} saham...")
+    results = run_screener(tickers)
+    foreign_flow = get_foreign_flow()
+    message = format_message(results, foreign_flow)
     print(message)
     send_telegram_message(message)
 

@@ -3,42 +3,15 @@ name: IDX Signal Screening
 on:
   schedule:
     # Semua waktu di bawah pakai UTC. WIB = UTC+7.
+    # Cek tiap 1 jam selama jam trading IDX (skip jam istirahat 11:30-13:30 WIB).
+    - cron: "0 2 * * 1-5"   # 09:00 WIB
+    - cron: "0 3 * * 1-5"   # 10:00 WIB
+    - cron: "0 4 * * 1-5"   # 11:00 WIB
+    - cron: "0 6 * * 1-5"   # 13:00 WIB
+    - cron: "0 7 * * 1-5"   # 14:00 WIB
+    - cron: "0 8 * * 1-5"   # 15:00 WIB
 
-    # 1) Jam 10:00 WIB (market sudah buka ~1 jam) -> volume+harga naik 7
-    #    hari, dibeli asing/BUMN, atau menyentuh support/RSI rendah
-    - cron: "0 3 * * 1-5"
-
-    # 2) Jam 15:30 WIB (market masih buka) -> screening BSJP (BUY & REBOUND
-    #    WATCH + confidence score)
-    - cron: "30 8 * * 1-5"
-
-    # 3) Jam 15:40 WIB (10 menit setelah laporan BSJP) -> saham kemarin
-    #    merah lalu hari ini hijau + volume naik dari rata-rata 1 minggu
-    - cron: "40 8 * * 1-5"
-
-    # 4) Jam 20:00 WIB (market sudah tutup total) -> rangkuman lengkap 6
-    #    kriteria: support+candle, candle Doji/Hammer, asing+BUMN, RSI
-    #    oversold, volume naik 7 hari, reversal merah-hijau
-    - cron: "0 13 * * 1-5"
-
-    # 5) Jam 08:15 WIB (sebelum market buka) -> screening SELL/overbought
-    #    + pola candle Doji/Hammer dari candle penutupan kemarin
-    - cron: "15 1 * * 1-5"
-
-    # NOTE: alert intraday (tiap 15 menit) DIMATIKAN sesuai permintaan --
-    # sekarang 5 laporan terjadwal per hari (08:15, 10:00, 15:30, 15:40,
-    # 20:00). Mode "intraday" tetap ada di kode dan bisa dites manual
-    # lewat workflow_dispatch di bawah kalau suatu saat mau diaktifkan lagi.
-
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Mode: evening / reversal / morning / midmorning / night / intraday"
-        required: false
-        default: "evening"
-
-permissions:
-  contents: write   # perlu buat commit balik state/notified_today.json
+  workflow_dispatch: {}   # biar bisa dijalankan manual dari tab Actions
 
 jobs:
   screen:
@@ -53,42 +26,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Determine mode from trigger
-        id: mode
-        run: |
-          if [ -n "${{ github.event.inputs.mode }}" ]; then
-            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
-          else
-            hour=$(date -u +%H)
-            minute=$(date -u +%M)
-            if [ "$hour" -eq 3 ] && [ "$minute" -eq 0 ]; then
-              echo "mode=midmorning" >> $GITHUB_OUTPUT
-            elif [ "$hour" -eq 8 ] && [ "$minute" -eq 30 ]; then
-              echo "mode=evening" >> $GITHUB_OUTPUT
-            elif [ "$hour" -eq 8 ] && [ "$minute" -eq 40 ]; then
-              echo "mode=reversal" >> $GITHUB_OUTPUT
-            elif [ "$hour" -eq 13 ] && [ "$minute" -eq 0 ]; then
-              echo "mode=night" >> $GITHUB_OUTPUT
-            elif [ "$hour" -eq 1 ] && [ "$minute" -eq 15 ]; then
-              echo "mode=morning" >> $GITHUB_OUTPUT
-            else
-              echo "mode=intraday" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Run screening
+      - name: Run screener
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py ${{ steps.mode.outputs.mode }}
-
-      - name: Commit updated state (mode intraday only)
-        if: steps.mode.outputs.mode == 'intraday'
-        run: |
-          git config user.name "idx-signal-bot"
-          git config user.email "actions@github.com"
-          if [ -f state/notified_today.json ]; then
-            git add state/notified_today.json
-            git diff --cached --quiet || git commit -m "chore: update notified state [skip ci]"
-            git push
-          fi
+        run: python main.py

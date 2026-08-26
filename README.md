@@ -1,35 +1,33 @@
-# IDX Signal Bot
+# IDX Signal Bot (v2 — Rebuild)
 
-Bot screening otomatis semua saham IDX, kirim notifikasi buy/sell/rebound ke Telegram.
-- **08:15 WIB (sebelum market buka)**: screening sinyal SELL (overbought/momentum melemah) + pola candle Doji/Hammer dari candle kemarin + data foreign flow FINAL.
-- **10:00 WIB (market sudah buka ~1 jam)**: volume naik 1.5x + harga naik 7 hari terakhir, dibeli asing/BUMN, atau menyentuh area support/RSI rendah.
-- **15:30 WIB (market masih buka)**: prediksi saham yang kemungkinan masih lanjut naik besok (BUY & REBOUND WATCH + confidence score).
-- **15:40 WIB**: saham yang kemarin merah lalu hari ini berbalik hijau, dibarengi volume di atas rata-rata 1 minggu terakhir.
-- **20:00 WIB (market sudah tutup total)**: rangkuman lengkap 6 kriteria sekaligus -- support+candle reversal, candle Doji/Hammer, asing+BUMN, RSI oversold, volume naik 7 hari, dan reversal merah-hijau.
-
-Mode **intraday** (alert real-time tiap 15 menit) masih ada di kode tapi **tidak lagi terjadwal otomatis** -- cuma bisa dites manual lewat tab Actions.
+Screener otomatis semua saham IDX, kirim notifikasi ke Telegram **tiap 1 jam selama jam trading** (09:00, 10:00, 11:00, 13:00, 14:00, 15:00 WIB). **Tidak ada batasan/dedup** — saham yang sama bisa muncul lagi di jam berikutnya kalau masih memenuhi kriteria.
 
 ⚠️ **Disclaimer**: ini alat bantu analisa teknikal, bukan rekomendasi finansial. Selalu riset sendiri (DYOR) dan pertimbangkan risiko sebelum transaksi.
+
+## Kriteria yang Dicek
+
+| Kriteria | Penjelasan |
+|---|---|
+| 🎯 **Support + Candle Reversal** | Harga dalam radius 3% dari titik terendah 20 hari, DAN candle hari ini berbentuk Doji/Hammer |
+| 🕯️ **Candle Doji/Hammer** | Doji/Hammer yang muncul setelah downtrend, sideway ~1 minggu, atau sideway ~1 bulan |
+| 🔄 **Reversal Merah ke Hijau** | Candle kemarin merah, candle hari ini hijau, volume hari ini > rata-rata 1 minggu terakhir |
+| 📉 **RSI Rendah (Oversold)** | RSI < 30 |
+| 🌍 **Dibeli Asing & BUMN** | Top 20 saham dengan net foreign buy positif, ditandai `[BUMN]` kalau relevan |
 
 ## 1. Setup Bot Telegram (5 menit)
 
 1. Chat **@BotFather** di Telegram → `/newbot` → ikuti instruksi → dapat **token** (bentuknya `123456:ABC-xxxxx`).
-2. Chat **@userinfobot** di Telegram → catat **chat ID** kamu (angka).
-3. Kirim 1 pesan apa saja ke bot yang baru kamu buat (biar bot bisa mulai kirim ke kamu).
+2. Chat **@userinfobot** di Telegram (atau tambahkan bot info serupa ke group) → catat **chat ID** kamu/group (angka, negatif kalau group).
+3. Kirim 1 pesan apa saja ke bot yang baru kamu buat / masukkan ke group.
 
 ## 2. Setup Repo GitHub
 
-1. Buat repo baru (bisa private), push semua file di folder ini ke repo tersebut.
+1. Buat repo baru, push semua file di folder ini ke repo tersebut (termasuk folder `.github`).
 2. Buka **Settings → Secrets and variables → Actions → New repository secret**, tambahkan:
    - `TELEGRAM_BOT_TOKEN` = token dari BotFather
-   - `TELEGRAM_CHAT_ID` = chat ID kamu
-3. Selesai — workflow di `.github/workflows/idx-signals.yml` akan otomatis jalan **5x sehari**:
-   - jam 08:15 WIB (sell screening + candle pattern + foreign flow final)
-   - jam 10:00 WIB (volume+harga naik 7 hari, asing+BUMN, support/RSI rendah)
-   - jam 15:30 WIB (screening BSJP + confidence score)
-   - jam 15:40 WIB (reversal merah-hijau + volume naik)
-   - jam 20:00 WIB (rangkuman lengkap 6 kriteria)
-4. Mau tes manual? Buka tab **Actions** di repo → pilih workflow **IDX Signal Screening** → **Run workflow** → pilih mode (`evening`/`reversal`/`morning`/`midmorning`/`night`/`intraday`).
+   - `TELEGRAM_CHAT_ID` = chat ID kamu/group
+3. Selesai — workflow di `.github/workflows/idx-signals.yml` otomatis jalan tiap 1 jam selama jam trading, hari kerja (Senin-Jumat).
+4. Mau tes manual? Buka tab **Actions** → pilih workflow **IDX Signal Screening** → **Run workflow**.
 
 ## 3. Jalankan Manual di Komputer Sendiri (opsional, buat testing)
 
@@ -37,72 +35,23 @@ Mode **intraday** (alert real-time tiap 15 menit) masih ada di kode tapi **tidak
 pip install -r requirements.txt
 export TELEGRAM_BOT_TOKEN="token_kamu"
 export TELEGRAM_CHAT_ID="chat_id_kamu"
-python main.py evening   # atau: python main.py morning
+python main.py
 ```
 
-## 4. Struktur Sinyal
+## Struktur File
 
-| Sinyal | Arti | Kapan muncul |
-|---|---|---|
-| **BUY** | Momentum naik / breakout | golden cross MA5>MA20, MACD bullish cross + harga naik, volume spike |
-| **REBOUND WATCH** | Kandidat rebound dari oversold | RSI < 35, atau baru saja oversold + mulai ada candle pembalikan |
-| **SELL** | Overbought / momentum melemah | RSI > 70, atau MACD bearish cross |
-| **⚡ BULLISH ALERT** (intraday, manual) | Baru mulai berbalik naik hari ini | EMA9 cross ke atas EMA21 di data 15 menit + harga naik |
-| **🕯️ CANDLE BULLISH REVERSAL** (khusus pagi) | Candle kemarin (saat market tutup) indikasi pembalikan naik | Doji/Hammer setelah sideway ~1 minggu, sideway ~1 bulan, atau downtrend |
-| **🔄 REVERSAL MERAH-HIJAU** (khusus 15:40) | Kemarin turun, hari ini berbalik naik dengan minat beli nyata | Candle kemarin merah, candle hari ini hijau, volume hari ini > rata-rata 1 minggu terakhir |
-| **🎯 SUPPORT + CANDLE** (khusus 20:00) | Harga di area support DAN candle nunjukin pembalikan | Harga dalam 3% dari harga terendah 20 hari + candle Doji/Hammer |
-| **🌍 ASING & BUMN** (10:00 & 20:00) | Saham yang banyak diminati asing, terutama yang BUMN | Top net foreign buy, ditandai [BUMN] kalau relevan |
-| **📉 RSI RENDAH** (khusus 20:00) | Jual jenuh (oversold) | RSI < 30 |
-| **📈 VOLUME NAIK 7 HARI** (khusus 20:00) | Minat beli meningkat selama seminggu | Rata-rata volume 3 hari terakhir > rata-rata 4 hari sebelumnya (dalam window 7 hari) |
-| **📊 VOLUME+HARGA NAIK 7 HARI** (khusus 10:00) | Breakout dikonfirmasi volume & tren harga | Volume hari ini > 1.5x rata-rata 7 hari + harga hari ini > harga 7 hari lalu |
-
-## 6. Data Foreign Flow & Tag BUMN
-
-Kedua laporan (sore & pagi) sekarang nampilin data foreign flow, tapi beda cakupan:
-
-| | Laporan Sore (15:30) | Laporan Pagi (08:15) |
-|---|---|---|
-| Data dari | Hari ini (market masih buka) | Hari trading terakhir (market SUDAH tutup) |
-| Sifat data | Masih bisa berubah dikit sampai closing | **Final/settled** |
-| Top saham ditampilkan | Top 5 buy & top 5 sell | Top 20 buy & top 20 sell (lebih lengkap) |
-
-Tiap saham yang muncul di sinyal BUY/REBOUND/SELL/Candle juga dikasih tag `[asing net buy/sell Rp...]` dan `[BUMN]` kalau relevan.
-
-⚠️ **Catatan jujur soal data foreign flow**: fungsi ini (`foreign_flow.py`) mengambil data dari endpoint IDX (`GetStockSummary`) berdasarkan pola yang umum dipakai komunitas untuk scraping data ini — **bukan dari dokumentasi API resmi publik IDX**. Kemungkinan ada penyesuaian nama field/parameter yang dibutuhkan setelah kamu coba jalankan (cek log `[foreign_flow]` di output Actions kalau datanya kosong/gagal). Kalau gagal, laporan tetap terkirim tanpa data foreign flow (tidak bikin seluruh proses gagal).
-
-## 7. Confidence Score untuk BSJP (Beli Sore Jual Pagi)
-
-⚠️ **Penting untuk dipahami**: IDX **menutup data broker summary (bandarmology per kode broker) selama jam trading berlangsung** sejak Desember 2021 — data itu baru bisa dilihat publik SETELAH market tutup. Karena laporan sore kita jalan jam 15:30 (market masih buka), data broker-level beneran gak tersedia saat itu, jadi ini BUKAN true bandarmology.
-
-Sebagai gantinya, tiap saham BUY/REBOUND WATCH di laporan sore dikasih **Confidence Score** (Tinggi/Sedang/Rendah) berdasarkan 4 faktor yang BENERAN tersedia jam 15:30:
-
-| Faktor | Yang dicek |
+| File | Fungsi |
 |---|---|
-| Foreign flow | Apakah asing net buy atau net sell hari itu |
-| Likuiditas | Rata-rata value transaksi 20 hari (di bawah Rp5 miliar/hari = rawan gap tidak stabil) |
-| Jarak ke resistance | Kalau harga sudah <2% dari harga tertinggi 20 hari = rawan profit taking |
-| Tren IHSG | Kalau IHSG sendiri downtrend = risiko gap-down market-wide buat semua saham |
+| `main.py` | Orkestrasi utama — download data, jalankan semua kriteria, format & kirim pesan |
+| `signals.py` | Logika deteksi 4 dari 5 kriteria (candle, support, reversal, RSI) |
+| `foreign_flow.py` | Ambil data net foreign buy/sell per saham dari IDX |
+| `bumn_list.py` | Daftar manual kode saham BUMN & anak usaha BUMN |
+| `idx_tickers.py` | Daftar semua kode saham IDX (fallback ke list manual kalau endpoint online gagal) |
+| `notifier.py` | Kirim pesan ke Telegram |
 
-Tiap saham mulai dari confidence **Tinggi**, turun ke **Sedang**/**Rendah** kalau ada 1/2+ faktor "waspada" (`⚠️`) yang muncul. List saham di laporan sore otomatis di-sort dari confidence tertinggi ke terendah.
+## Catatan Jujur / Keterbatasan
 
-Ambang batas likuiditas (`MIN_LIQUIDITY_RUPIAH` di `bsjp_confidence.py`) dan threshold resistance (di `bsjp_confidence.py`) bisa disesuaikan kalau ternyata kurang pas.
-
-**Tetap diingat**: confidence score ini murni gabungan indikator, BUKAN jaminan harga gak akan turun. Gap-down bisa tetap terjadi karena sentimen global/berita mendadak yang gak bisa diprediksi indikator manapun.
-
-## 8. Yang Bisa Dikembangkan Selanjutnya
-
-- Tambah lebih banyak kode saham di `idx_tickers.py` (`FALLBACK_TICKERS`) kalau mau cakupan lebih luas.
-- Tambah filter likuiditas (minimal volume/value transaksi) biar gak dapat saham gorengan.
-- Tambah tracking portofolio biar sinyal SELL bisa berbasis target profit/stop-loss kamu sendiri, bukan cuma indikator umum.
-- Tambah backtest buat ngecek akurasi sinyal sebelum dipakai beneran.
-
-## ⚠️ Catatan Soal Jadwal Tiap 15 Menit
-
-- Job intraday jalan ~26x/hari (jam 09:00-15:30 WIB) x 5 hari kerja = ~130x/minggu. Kalau repo kamu **public**, GitHub Actions gratis unlimited. Kalau **private**, ada limit 2000 menit/bulan gratis — cek dulu biar gak kepotong kuota di tengah bulan.
-- State dedup (`state/notified_today.json`) di-commit balik ke repo tiap run, jadi pastikan branch default gak di-protect dari push langsung oleh Actions bot.
-- GitHub cron kadang delay beberapa menit di jam-jam sibuk — jangan berharap presisi ke detik.
-
-## Catatan Teknis
-
-- Data harga diambil dari Yahoo Finance (`yfinance`), interval harian — bukan real-time intraday, jadi sinyal sore dihitung dari harga penutupan hari itu.
-- Daftar saham diambil otomatis dari endpoint publik IDX, dengan fallback ke daftar saham populer kalau endpoint gagal diakses.
+- **Belum ada backtest** — kriteria di atas belum diuji ke data historis, jadi belum ada angka pasti soal akurasinya. Disarankan pantau dulu beberapa minggu sebelum dipakai serius.
+- **Endpoint foreign flow** dari IDX berdasarkan pola komunitas, bukan API resmi publik — kalau gagal, laporan tetap lanjut tanpa data ini (tidak bikin error total).
+- **Tidak ada dedup** artinya kalau saham masih memenuhi kriteria yang sama di jam berikutnya, dia akan muncul lagi di notifikasi berikutnya — ini disengaja sesuai permintaan, bukan bug.
+- Data yang dipakai murni **candle harian**, jadi di jam-jam awal trading (09:00-11:00), "candle hari ini" masih mencerminkan harga yang sedang berjalan (belum final sampai market tutup).
