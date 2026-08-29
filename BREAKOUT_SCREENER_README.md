@@ -27,6 +27,16 @@ run_breakout_screener.py   # entry point screening live
 run_backtest.py            # entry point backtest historis
 ```
 
+## Jadwal Otomatis
+
+Sudah dijadwalkan lewat `.github/workflows/breakout-screener.yml` (**terpisah** dari bot lama `main.py`, keduanya bisa jalan berdampingan):
+- **15:30 WIB** — sebelum market tutup, screening breakout + dana asing/BUMN (data hari ini masih berjalan)
+- **20:00 WIB** — setelah market tutup total, screening breakout + dana asing/BUMN (data hari ini sudah FINAL)
+
+Kedua run menampilkan section **"DANA ASING & BUMN MASUK/KELUAR"** — top 20 saham dengan net foreign buy/sell terbesar hari itu (nominal dalam Rupiah), ditandai `[BUMN]` kalau relevan.
+
+⚠️ **Catatan jujur soal ketepatan jadwal**: GitHub Actions **tidak menjamin jadwal cron berjalan tepat waktu** — ini keterbatasan platform gratisnya, bukan bug di kode kita. GitHub sendiri menyatakan jadwal bisa **delay beberapa menit hingga puluhan menit**, terutama di jam-jam ramai (jadwal yang bunyi tepat di menit ke-00 seperti 15:30 dan 20:00 lebih rentan delay karena banyak repo lain juga menjadwalkan di waktu yang sama). Kadang run juga bisa **ke-skip sepenuhnya** kalau server sedang penuh. Kalau butuh ketepatan waktu yang mutlak, GitHub Actions gratis bukan pilihan yang cocok — alternatifnya perlu server sendiri (VPS) dengan cron asli.
+
 ## Cara Pakai
 
 ```bash
