@@ -3,26 +3,15 @@ name: IDX Signal Screening
 on:
   schedule:
     # Semua waktu di bawah pakai UTC. WIB = UTC+7.
+    # Cek tiap 1 jam selama jam trading IDX (skip jam istirahat 11:30-13:30 WIB).
+    - cron: "0 2 * * 1-5"   # 09:00 WIB
+    - cron: "0 3 * * 1-5"   # 10:00 WIB
+    - cron: "0 4 * * 1-5"   # 11:00 WIB
+    - cron: "0 6 * * 1-5"   # 13:00 WIB
+    - cron: "0 7 * * 1-5"   # 14:00 WIB
+    - cron: "30 8 * * 1-5"  # 15:30 WIB
 
-    # 1) Jam 15:30 WIB (market masih buka) -> prediksi saham lanjut naik besok
-    - cron: "30 8 * * 1-5"
-
-    # 2) Jam 08:15 WIB (sebelum market buka) -> screening sell/overbought
-    - cron: "15 1 * * 1-5"
-
-    # 3) Tiap 15 menit selama jam trading (09:00-15:30 WIB = 02:00-08:30 UTC)
-    #    -> alert real-time begitu ada saham mulai bullish
-    - cron: "*/15 2-8 * * 1-5"
-
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Mode: evening / morning / intraday"
-        required: false
-        default: "intraday"
-
-permissions:
-  contents: write   # perlu buat commit balik state/notified_today.json
+  workflow_dispatch: {}   # biar bisa dijalankan manual dari tab Actions
 
 jobs:
   screen:
@@ -37,36 +26,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Determine mode from trigger
-        id: mode
-        run: |
-          if [ -n "${{ github.event.inputs.mode }}" ]; then
-            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
-          else
-            hour=$(date -u +%H)
-            minute=$(date -u +%M)
-            if [ "$hour" -eq 8 ] && [ "$minute" -eq 30 ]; then
-              echo "mode=evening" >> $GITHUB_OUTPUT
-            elif [ "$hour" -eq 1 ] && [ "$minute" -eq 15 ]; then
-              echo "mode=morning" >> $GITHUB_OUTPUT
-            else
-              echo "mode=intraday" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Run screening
+      - name: Run screener
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py ${{ steps.mode.outputs.mode }}
-
-      - name: Commit updated state (mode intraday only)
-        if: steps.mode.outputs.mode == 'intraday'
-        run: |
-          git config user.name "idx-signal-bot"
-          git config user.email "actions@github.com"
-          if [ -f state/notified_today.json ]; then
-            git add state/notified_today.json
-            git diff --cached --quiet || git commit -m "chore: update notified state [skip ci]"
-            git push
-          fi
+        run: python main.py
