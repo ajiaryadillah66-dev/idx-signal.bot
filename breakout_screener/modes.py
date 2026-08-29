@@ -1,15 +1,19 @@
 """
-Klasifikasi 3 mode screening (Bagian 14): RADAR, SIAGA, ENTRY.
+Klasifikasi 4 mode screening: RADAR, SIAGA, ENTRY (Bagian 14 -- spek asli
+ISAT/TMPO, fokus breakout ke atas), dan BOUNCE (TAMBAHAN, filosofi beda:
+support-based entry, bukan breakout).
 
-Prioritas pengecekan: ENTRY > SIAGA > RADAR -- satu saham dicek dari
-level paling matang dulu, biar saham yang sudah breakout confirmed gak
-malah "terjebak" di kategori RADAR yang lebih longgar.
+Prioritas pengecekan: ENTRY > SIAGA > RADAR > BOUNCE -- satu saham dicek
+dari level paling matang dulu (breakout dulu), BOUNCE dicek PALING AKHIR
+karena filosofinya beda arah (beli di support, bukan breakout ke atas) --
+biar gak menimpa sinyal breakout yang lebih kuat kalau kebetulan dua-duanya
+kena.
 """
 
 from . import config as cfg
 
 
-def classify_mode(df, score_result: dict) -> str:
+def classify_mode(df, score_result: dict, bounce_info: dict = None) -> str:
     comp = score_result["components"]
     breakout = comp["breakout"]
     rsi = comp["rsi"]
@@ -45,5 +49,9 @@ def classify_mode(df, score_result: dict) -> str:
         and last_rsi is not None and 45 <= last_rsi <= 60
     ):
         return "RADAR"
+
+    # --- MODE D: BOUNCE -- support-based, dicek PALING AKHIR ---
+    if bounce_info is not None and bounce_info.get("is_bounce_setup"):
+        return "BOUNCE"
 
     return None

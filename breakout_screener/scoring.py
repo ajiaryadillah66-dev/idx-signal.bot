@@ -426,3 +426,65 @@ def compute_total_score(df) -> dict:
             "false_breakout": false_breakout, "overextended": overextended,
         },
     }
+
+
+def _candle_shape(o: float, h: float, l: float, c: float):
+    """Cek bentuk candle: Doji (body sangat kecil) & Hammer (sumbu bawah panjang)."""
+    body = abs(c - o)
+    candle_range = h - l
+    if candle_range <= 0:
+        return False, False
+    upper_shadow = h - max(o, c)
+    lower_shadow = min(o, c) - l
+    is_doji = body <= 0.1 * candle_range
+    is_hammer = body > 0 and lower_shadow >= 2 * body and upper_shadow <= 0.3 * body
+    return is_doji, is_hammer
+
+
+def score_support_bounce(df) -> dict:
+    """
+    Mode BOUNCE -- TAMBAHAN di luar spek asli ISAT/TMPO (yang murni fokus
+    ke breakout resistance). Ini filosofi beda: nyari saham yang lagi di
+    area SUPPORT (bukan resistance) DAN nunjukin tanda pembalikan
+    (candle Doji/Hammer + RSI oversold) -- support di sini dipakai
+    sebagai sinyal MASUK, bukan cuma referensi stop loss seperti di
+    mode-mode breakout lainnya.
+
+    Return: {"is_bounce_setup": bool, "details": [...], "support_level": ...,
+    "distance_pct": ...}
+    """
+    details = []
+    if len(df) < 21:
+        return {"is_bounce_setup": False, "details": details, "support_level": None, "distance_pct": None}
+
+    support = _last(df, "Support20")
+    close = _last(df, "Close")
+    rsi = _last(df, "RSI14")
+    if support is None or close is None or support <= 0:
+        return {"is_bounce_setup": False, "details": details, "support_level": support, "distance_pct": None}
+
+    distance_pct = (close - support) / support * 100
+    near_support = 0 <= distance_pct <= cfg.SUPPORT_TOUCH_PCT
+
+    last = df.iloc[-1]
+    o, h, l, c = float(last["Open"]), float(last["High"]), float(last["Low"]), float(last["Close"])
+    is_doji, is_hammer = _candle_shape(o, h, l, c)
+    has_reversal_candle = is_doji or is_hammer
+
+    is_oversold = rsi is not None and rsi < cfg.RSI_OVERSOLD_BOUNCE
+
+    is_bounce_setup = near_support and has_reversal_candle and is_oversold
+
+    if near_support:
+        details.append(f"harga dekat support (jarak {distance_pct:.1f}%)")
+    if has_reversal_candle:
+        details.append(f"candle {'Hammer' if is_hammer else 'Doji'}")
+    if is_oversold:
+        details.append(f"RSI oversold ({rsi:.1f})")
+
+    return {
+        "is_bounce_setup": is_bounce_setup,
+        "details": details,
+        "support_level": round(support, 2),
+        "distance_pct": round(distance_pct, 2),
+    }

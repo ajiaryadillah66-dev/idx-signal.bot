@@ -77,3 +77,10 @@ CATEGORY_THRESHOLDS = [
 # --- Backtest (Bagian 18) ---
 MAX_HOLDING_DAYS = 15
 FALSE_BREAKOUT_WINDOW_DAYS = 3   # breakout dianggap "gagal" kalau balik di bawah resistance dalam N hari
+
+# --- Mode BOUNCE (tambahan di luar spek asli ISAT/TMPO) ---
+# Support-based entry: filosofi beda dari RADAR/SIAGA/ENTRY (yang semuanya
+# fokus ke breakout ke atas). BOUNCE nyari saham yang lagi di area support
+# DAN nunjukin tanda pembalikan (candle + RSI oversold).
+SUPPORT_TOUCH_PCT = 3.0       # radius dianggap "menyentuh" support (%)
+RSI_OVERSOLD_BOUNCE = 35      # ambang RSI dianggap oversold untuk bounce
