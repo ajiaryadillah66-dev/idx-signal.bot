@@ -101,10 +101,17 @@ def analyze_ticker(ticker_no_suffix: str, foreign_flow: dict) -> dict:
     flow = foreign_flow.get(ticker_no_suffix)
 
     last = df_ind.iloc[-1]
+    close_price = float(last["Close"])
+    support_level = float(last["Support20"]) if pd.notna(last["Support20"]) else None
+    support_distance_pct = (
+        round((close_price - support_level) / support_level * 100, 2)
+        if support_level and support_level > 0 else None
+    )
+
     return {
         "ticker": ticker_no_suffix,
         "error": None,
-        "price": round(float(last["Close"]), 2),
+        "price": round(close_price, 2),
         "is_bumn": is_bumn(ticker_no_suffix),
         "foreign_flow": flow,
         "criteria_hits": criteria_hits,
@@ -113,6 +120,8 @@ def analyze_ticker(ticker_no_suffix: str, foreign_flow: dict) -> dict:
         "mode": mode,
         "bounce_details": bounce_info.get("details", []) if bounce_info else [],
         "warnings": score_result["components"]["overextended"].get("warnings", []),
+        "support_level": round(support_level, 2) if support_level else None,
+        "support_distance_pct": support_distance_pct,
         "entry_zone": entry_info.get("entry_zone"),
         "stop_loss": stop_loss_info.get("stop_loss"),
         "target1": target_info.get("target1"),
@@ -134,6 +143,12 @@ def format_report(results: list) -> str:
             continue
 
         lines.append(f"  Harga: {r['price']}")
+
+        if r.get("support_level") is not None:
+            lines.append(f"  Support: {r['support_level']} (jarak {r['support_distance_pct']}%)")
+        else:
+            lines.append("  Support: - (data belum cukup)")
+
         lines.append(f"  Skor Breakout: {r['score']}/100 ({r['category']}) - Mode: {r['mode'] or '-'}")
 
         if r["criteria_hits"]:
