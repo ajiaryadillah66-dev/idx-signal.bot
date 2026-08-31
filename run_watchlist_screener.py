@@ -25,6 +25,7 @@ Penggunaan manual:
 import sys
 import time
 
+import pandas as pd
 import yfinance as yf
 
 from watchlist import WATCHLIST_TICKERS
@@ -51,6 +52,11 @@ def analyze_ticker(ticker_no_suffix: str, foreign_flow: dict) -> dict:
     try:
         df = yf.download(ticker, period=HISTORY_PERIOD, interval="1d", progress=False)
         df = df.dropna(how="all")
+        # yfinance kadang balikin kolom MultiIndex (Field, Ticker) walau cuma
+        # download 1 saham -- flatten ke kolom biasa (Open/High/Low/Close/Volume)
+        # biar df["Low"] dst selalu Series, bukan DataFrame.
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
     except Exception as e:
         return {"ticker": ticker_no_suffix, "error": f"Gagal download: {e}"}
 
@@ -164,7 +170,13 @@ def main():
     results = []
     for t in WATCHLIST_TICKERS:
         print(f"[watchlist] Proses {t}...")
-        results.append(analyze_ticker(t, foreign_flow))
+        try:
+            results.append(analyze_ticker(t, foreign_flow))
+        except Exception as e:
+            # Jaga-jaga: 1 saham error (data aneh/delisted) TIDAK BOLEH
+            # bikin seluruh script berhenti -- skip saham itu, lanjut ke berikutnya.
+            print(f"[watchlist] Error tak terduga di {t}: {e}")
+            results.append({"ticker": t, "error": f"Error tak terduga: {e}"})
         time.sleep(1)  # sopan-sopan ke server yfinance
 
     report = format_report(results)
